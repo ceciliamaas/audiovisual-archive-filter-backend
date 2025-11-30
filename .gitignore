@@ -1,0 +1,113 @@
+# ========================================
+# Python
+# ========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.p
+*.db
+
+# Byte-compiled / optimized / DLL files
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ========================================
+# Environment variables / secrets
+# ========================================
+.env
+.env.*
+!.env.example
+
+# ========================================
+# Package / build artifacts
+# ========================================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ========================================
+# Jupyter
+# ========================================
+.ipynb_checkpoints/
+jupyter_cache/
+.jupyter/
+
+# ========================================
+# Logs
+# ========================================
+*.log
+
+# ========================================
+# IDE / editor files
+# ========================================
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# PyCharm / JetBrains
+.idea/
+
+# ========================================
+# OS files
+# ========================================
+.DS_Store
+Thumbs.db
+
+# ========================================
+# Cache / temp
+# ========================================
+.cache/
+pytest_cache/
+pip-wheel-metadata/
+__pypackages__/
+.mypy_cache/
+.pytest_cache/
+.tox/
+.nox/
+coverage.xml
+htmlcov/
+
+# ========================================
+# Data (optional)
+# ========================================
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.arrow
+*.sqlite
+*.sqlite3
+*.h5
+*.hdf5
+*.pickle
+
+# You can comment these out if you want to track data.
+
+# ========================================
+# Large media (optional)
+# ========================================
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.zip
+*.tar
+*.gz
+*.7z
+
+# ========================================
+# Node modules (if using JS frontend or tools)
+# ========================================
+node_modules/

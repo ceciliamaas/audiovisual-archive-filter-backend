@@ -24,7 +24,7 @@ if not image_paths:
     raise FileNotFoundError("No frames found in output_frames or its subdirectories.")
 
 # Filter to start from frame_00164.jpg
-start_frame = "video_1_frame_00362.jpg"
+start_frame = "video_2_frame_00317.jpg"
 image_paths = [path for path in image_paths if path.name >= start_frame]
 
 if not image_paths:

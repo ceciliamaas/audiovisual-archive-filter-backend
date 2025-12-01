@@ -4,9 +4,29 @@ from PIL import Image
 from dotenv import load_dotenv
 import replicate
 import os
+import os
+import replicate
 
-# Load environment variables (.env)
-load_dotenv()
+# Try loading .env locally (ignored on Streamlit Cloud)
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()  # loads REPLICATE_API_TOKEN locally
+except:
+    pass
+
+# Always load from environment (this is where Streamlit Secrets go)
+REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
+
+if not REPLICATE_API_TOKEN:
+    raise RuntimeError(
+        "Missing Replicate API token. \n"
+        "Locally: add to .env as REPLICATE_API_TOKEN=xxx \n"
+        "Streamlit: add in Secrets as REPLICATE_API_TOKEN='xxx'"
+    )
+
+# Create Replicate client
+client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
 # -----------------------------
 # OPTIONAL YOLO SUPPORT (LOCAL)

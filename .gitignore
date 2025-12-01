@@ -5,7 +5,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.pkl
 *.p
 *.db
 
@@ -91,7 +90,6 @@ htmlcov/
 *.sqlite3
 *.h5
 *.hdf5
-*.pickle
 
 # You can comment these out if you want to track data.
 
@@ -111,3 +109,11 @@ htmlcov/
 # Node modules (if using JS frontend or tools)
 # ========================================
 node_modules/
+
+
+
+*.pt
+*.onnx
+*.engine
+models/
+yolo/

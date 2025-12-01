@@ -50,6 +50,9 @@ def search(query, top_k=12):
         sim = cosine_similarity(text_vec, frame_vec)
         scored.append((path, sim))
 
+    st.write("TEXT VEC TYPE:", type(text_vec))
+    st.write("FRAME VEC TYPE:", type(frame_vec))
+
     # Sort by similarity (descending)
     scored.sort(key=lambda x: x[1], reverse=True)
 

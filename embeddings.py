@@ -52,7 +52,7 @@ def embed_text_clip(text: str):
         "openai/clip",
         input={"text": text, "task": "embed"},
     )
-    return np.array(output)
+    return np.array(output["embedding"])
 
 
 def embed_clip(image: Image.Image):
@@ -67,7 +67,7 @@ def embed_clip(image: Image.Image):
         "openai/clip",
         input={"image": buf, "task": "embed"},
     )
-    return np.array(output)
+    return np.array(output["embedding"])
 
 
 def embed_text_image_clip(text: str, image: Image.Image):

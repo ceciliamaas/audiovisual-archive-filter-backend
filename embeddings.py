@@ -98,9 +98,4 @@ def run_yolo_locally(image_path: str):
 def cosine_similarity(a, b):
     import streamlit as st
 
-    st.write("TYPE A:", type(a))
-    st.write("TYPE B:", type(b))
-    st.write("A EXAMPLE:", str(a)[:200])
-    st.write("B EXAMPLE:", str(b)[:200])
-
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))

@@ -4,6 +4,9 @@ import numpy as np
 import pickle
 from embeddings import embed_text_clip, cosine_similarity
 from pathlib import Path
+import os
+
+st.write("TOKEN FOUND:", bool(os.environ.get("REPLICATE_API_TOKEN")))
 
 # -----------------------------
 # Load your embeddings (stored earlier)

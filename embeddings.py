@@ -17,7 +17,11 @@ import os
 import io
 import numpy as np
 from PIL import Image
-from ultralytics import YOLO
+
+try:
+    from ultralytics import YOLO
+except Exception:
+    YOLO = None
 from dotenv import load_dotenv
 import replicate
 
@@ -158,7 +162,8 @@ def embed_image_yolo_clip(image_input) -> dict:
             }
         }
     """
-
+    if YOLO is None:
+        raise RuntimeError("YOLO is not available in this environment")
     img = load_image(image_input)
     w, h = img.size
 

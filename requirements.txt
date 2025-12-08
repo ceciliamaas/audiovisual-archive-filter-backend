@@ -1,0 +1,5 @@
+streamlit
+numpy
+pillow
+replicate
+python-dotenv

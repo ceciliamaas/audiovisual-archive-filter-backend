@@ -90,6 +90,11 @@ htmlcov/
 *.sqlite3
 *.h5
 *.hdf5
+*.png
+*.jpg
+*.jpeg
+*.pkl
+*.mp4
 
 # You can comment these out if you want to track data.
 

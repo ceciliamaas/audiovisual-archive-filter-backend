@@ -2,6 +2,9 @@
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.poetry]
+package-mode = false
+
 [project]
 name = "audiovisual-archive-filter"
 version = "1.0.0"

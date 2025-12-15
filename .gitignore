@@ -2,20 +2,74 @@
 # Python
 # ========================================
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.p
-*.db
-
-# Byte-compiled / optimized / DLL files
+*.py[cod]
+*$py.class
 *.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
 
 # Virtual environments
-.venv/
+.env
+.venv
 venv/
-env/
 ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ========================================
+# Data directories 
+# ========================================
+data/
+data_dev/
+*.mp4
+*.avi
+*.mov
+*.mkv
 
 # ========================================
 # Environment variables / secrets
@@ -95,6 +149,16 @@ htmlcov/
 *.jpeg
 *.pkl
 *.mp4
+
+# Data directories - now stored in S3
+input_videos/
+app/input_videos/
+output_frames/
+app/output_frames/
+cropped_objects/
+app/cropped_objects/
+embeddings/
+app/embeddings/
 
 # You can comment these out if you want to track data.
 

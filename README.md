@@ -13,17 +13,20 @@ AI-powered search for audiovisual archives using CLIP embeddings and YOLO object
 ## Setup
 
 1. Install dependencies:
+
 ```bash
 pip install -e .
 ```
 
 2. Configure environment variables:
+
 ```bash
 cp .env.example .env
 # Edit .env with your AWS credentials and settings
 ```
 
 3. Run the application:
+
 ```bash
 streamlit run app.py
 ```

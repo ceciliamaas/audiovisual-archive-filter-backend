@@ -287,9 +287,10 @@ class SearchEngine:
     ) -> Optional[np.ndarray]:
         """Compute CLIP embedding for image query"""
         try:
-            # For now, using file path - in production you might want to upload to temp storage
-            inputs = {"image": str(image_path)}
-            output = self.replicate_client.run(self.model_name, input=inputs)
+            # Open image file and send to Replicate
+            with open(image_path, "rb") as image_file:
+                inputs = {"image": image_file, "model": "ViT-B/32"}
+                output = self.replicate_client.run(self.model_name, input=inputs)
 
             if output and "embedding" in output:
                 embedding_list = output["embedding"]

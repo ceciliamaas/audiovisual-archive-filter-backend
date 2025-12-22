@@ -38,9 +38,8 @@ def render_search_interface() -> Optional[Dict[str, Any]]:
     if search_type == "🔤 Búsqueda por texto":
         query_config = _render_text_search()
     else:
-        # Image search disabled
-        st.info("🚧 La búsqueda por imagen estará disponible próximamente")
-        query_config = None
+        # Image search enabled
+        query_config = _render_image_search()
 
     # Show max results slider below search interface
     max_results = st.slider(
@@ -130,6 +129,10 @@ def _render_text_search() -> Optional[Dict[str, Any]]:
 def _render_image_search() -> Optional[Dict[str, Any]]:
     """Render image search interface"""
 
+    # Initialize session state for image path
+    if "selected_image_path" not in st.session_state:
+        st.session_state.selected_image_path = None
+
     # Image upload
     uploaded_file = st.file_uploader(
         "Sube una imagen de referencia:",
@@ -146,6 +149,7 @@ def _render_image_search() -> Optional[Dict[str, Any]]:
         ) as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             image_path = tmp_file.name
+            st.session_state.selected_image_path = image_path
 
         # Show preview
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -181,11 +185,16 @@ def _render_image_search() -> Optional[Dict[str, Any]]:
                         )
 
                     if st.button("Usar esta imagen"):
-                        image_path = str(selected_example)
+                        st.session_state.selected_image_path = str(selected_example)
+                        st.rerun()
             else:
                 st.info("No hay imágenes de ejemplo disponibles")
         else:
             st.info("Directorio de imágenes de ejemplo no encontrado")
+
+    # Use session state image path if no upload
+    if image_path is None and st.session_state.selected_image_path:
+        image_path = st.session_state.selected_image_path
 
     # Search button
     search_clicked = st.button(

@@ -30,11 +30,15 @@ def render_results(results: List[SearchResult], query_config: dict) -> None:
 
     # Results header
     st.markdown("---")
-    query_text = query_config.get("query", "")
-    if query_text:
+
+    # Display different headers based on query type
+    query_type = query_config.get("type", "text")
+    if query_type == "text":
+        query_text = query_config.get("query", "")
         st.markdown(f"### 📋 Resultados para '{query_text}'")
-    else:
-        st.markdown(f"### 📋 Resultados ({len(results)} encontrados)")
+    else:  # image search
+        st.markdown(f"### 📋 Resultados de búsqueda por imagen")
+        st.caption(f"{len(results)} resultados encontrados")
 
     # Group results by type for better organization
     frame_results = [r for r in results if r.result_type == "frame"]

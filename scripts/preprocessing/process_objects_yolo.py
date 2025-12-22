@@ -56,7 +56,7 @@ OBJECTS_DIR.mkdir(parents=True, exist_ok=True)
 # TARGET_VIDEOS = None                    # Process all videos
 # TARGET_VIDEOS = ["video_CH27"]          # Process only CH27
 # TARGET_VIDEOS = ["video_1", "video_2"]  # Process specific videos
-TARGET_VIDEOS = ["video_1"]  # Currently targeting video 1
+TARGET_VIDEOS = ["video_CH205"]  # Currently targeting video 1
 
 # YOLO classes to detect (can be customized)
 # Try with most common YOLO classes

@@ -12,50 +12,41 @@ import tempfile
 def _get_example_images() -> Dict[str, str]:
     """
     Get example images from storage (S3 or local fallback).
-    
+
     Returns:
         Dict mapping display name to storage path
     """
     from ...storage import get_storage_manager
-    
+
     example_images = {}
-    
+
     # Try S3 first
     try:
         storage = get_storage_manager().get_storage()
+
+        # List all files in example_images/ prefix
+        example_files = storage.list_files("example_images/")
         
-        # Check for example images in S3
-        # Note: This is a simple implementation - you may need to implement list_files in storage
-        example_prefixes = ["example_images/"]
-        
-        # Known example images (you can expand this list)
-        known_examples = [
-            "example_1.jpg",
-            "example_2.jpg", 
-            "example_3.jpg",
-            "sample_camera.jpg",
-            "sample_building.jpg",
-            "sample_person.jpg",
-        ]
-        
-        for filename in known_examples:
-            s3_path = f"example_images/{filename}"
-            if storage.file_exists(s3_path):
+        for s3_path in example_files:
+            # Only include image files
+            if s3_path.lower().endswith(('.jpg', '.jpeg', '.png')):
+                # Extract filename from path
+                filename = Path(s3_path).name
                 # Use filename without extension as display name
-                display_name = Path(filename).stem.replace("_", " ").title()
+                display_name = Path(filename).stem.replace("_", " ").replace("-", " ").title()
                 example_images[display_name] = s3_path
-                
+
     except Exception as e:
         st.warning(f"No se pudieron cargar imágenes de ejemplo desde S3: {e}")
-    
+
     # Fallback to local directory if no S3 images found
     if not example_images:
         local_dir = Path("data/example_images")
         if local_dir.exists():
             for img_file in local_dir.glob("*.[jp][pn][g]*"):
-                display_name = img_file.stem.replace("_", " ").title()
+                display_name = img_file.stem.replace("_", " ").replace("-", " ").title()
                 example_images[display_name] = str(img_file)
-    
+
     return example_images
 
 
@@ -221,31 +212,55 @@ def _render_image_search() -> Optional[Dict[str, Any]]:
 
             if selected_example:
                 example_path = example_images[selected_example]
+
+                # Check if it's a local path or S3 path
+                is_local = Path(example_path).exists()
                 
-                # Download and show preview
-                try:
-                    import tempfile
-                    from ...storage import get_storage_manager
-                    
-                    # Download to temp file for display
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                if is_local:
+                    # Local file - use directly
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        st.image(
+                            example_path,
+                            caption=f"Ejemplo: {selected_example}",
+                            use_container_width=True,
+                        )
+
+                    if st.button("Usar esta imagen"):
+                        st.session_state.selected_image_path = example_path
+                        st.rerun()
+                else:
+                    # S3/remote file - download it
+                    try:
+                        from ...storage import get_storage_manager
+
+                        # Download to temp file for display and use
+                        tmp_file = tempfile.NamedTemporaryFile(
+                            delete=False, suffix=Path(example_path).suffix
+                        )
+                        tmp_path = tmp_file.name
+                        tmp_file.close()
+                        
                         storage = get_storage_manager().get_storage()
-                        if storage.download_file(example_path, tmp.name):
+                        if storage.download_file(example_path, tmp_path):
                             col1, col2, col3 = st.columns([1, 2, 1])
                             with col2:
                                 st.image(
-                                    tmp.name,
+                                    tmp_path,
                                     caption=f"Ejemplo: {selected_example}",
                                     use_container_width=True,
                                 )
-                            
+
                             if st.button("Usar esta imagen"):
-                                st.session_state.selected_image_path = tmp.name
+                                st.session_state.selected_image_path = tmp_path
                                 st.rerun()
                         else:
-                            st.error("No se pudo cargar la imagen de ejemplo")
-                except Exception as e:
-                    st.error(f"Error cargando imagen: {e}")
+                            st.error("No se pudo cargar la imagen de ejemplo desde el almacenamiento")
+                            st.caption(f"Ruta: {example_path}")
+                    except Exception as e:
+                        st.error(f"Error cargando imagen: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
         else:
             st.info("No hay imágenes de ejemplo disponibles")
 

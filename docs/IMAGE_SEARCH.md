@@ -18,6 +18,7 @@ The search by image feature allows users to find similar content in the video ar
 #### `src/core/search.py`
 
 - **`SearchEngine.compute_image_embedding()`**: Computes CLIP embedding for an image file
+
   - Opens the image file and sends it to the Replicate API
   - Uses the `openai/clip` model with ViT-B/32 architecture
   - Normalizes the resulting embedding vector
@@ -117,6 +118,7 @@ python tests/test_image_search.py
 ```
 
 This tests:
+
 - Image embedding computation
 - Full search workflow
 - Search engine status and configuration
@@ -124,6 +126,7 @@ This tests:
 ## Future Enhancements
 
 Possible improvements:
+
 - Local CLIP model deployment (no API dependency)
 - Support for more image formats
 - Batch image upload and comparison

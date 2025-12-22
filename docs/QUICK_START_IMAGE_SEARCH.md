@@ -5,6 +5,7 @@ This guide will help you start using the image similarity search feature.
 ## Prerequisites
 
 1. Ensure you have the required API token:
+
    ```bash
    # In your .env file
    REPLICATE_API_TOKEN=your_token_here
@@ -20,26 +21,31 @@ This guide will help you start using the image similarity search feature.
 ### Via Web Interface
 
 1. **Start the application:**
+
    ```bash
    python main.py
    ```
 
 2. **Select image search mode:**
+
    - Click on "🖼️ Búsqueda por imagen" radio button
 
 3. **Choose your image:**
-   
+
    **Option A: Upload your own image**
-   - Click "Browse files" 
+
+   - Click "Browse files"
    - Select a JPG, JPEG, or PNG image
    - Preview appears automatically
-   
+
    **Option B: Use example images**
+
    - Expand "📷 Usar imágenes de ejemplo"
    - Select an image from the dropdown
    - Click "Usar esta imagen"
 
 4. **Execute search:**
+
    - Click "🔍 Buscar por imagen"
    - Wait for results (typically 2-5 seconds)
 
@@ -91,16 +97,19 @@ for result in results:
 ## Troubleshooting
 
 ### No results found
+
 - Try lowering the similarity threshold in configuration
 - Ensure embeddings are properly loaded
 - Check that reference image is clear and relevant
 
 ### Slow performance
+
 - First search may be slow while embeddings load
 - Subsequent searches are much faster
 - Consider reducing max_results
 
 ### Error messages
+
 - Check that REPLICATE_API_TOKEN is set correctly
 - Verify embeddings exist in storage
 - Ensure image file is valid (not corrupted)

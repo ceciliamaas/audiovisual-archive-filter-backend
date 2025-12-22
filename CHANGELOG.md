@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - **Image similarity search**: Users can now search the archive by uploading reference images
   - Upload custom images or select from example images
   - Uses CLIP embeddings for visual similarity matching
@@ -20,12 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test suite for image search in `tests/test_image_search.py`
 
 ### Changed
+
 - Updated search interface to enable image search mode
 - Enhanced results display to show appropriate headers for text vs image queries
 - Improved `compute_image_embedding()` to properly handle image files with Replicate API
 - Updated README with image search feature information
 
 ### Fixed
+
 - Image path handling in `_render_image_search()` to properly maintain selected images
 - Example image selection workflow with session state management
 

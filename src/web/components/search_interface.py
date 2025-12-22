@@ -9,6 +9,56 @@ from typing import Optional, Dict, Any
 import tempfile
 
 
+def _get_example_images() -> Dict[str, str]:
+    """
+    Get example images from storage (S3 or local fallback).
+    
+    Returns:
+        Dict mapping display name to storage path
+    """
+    from ...storage import get_storage_manager
+    
+    example_images = {}
+    
+    # Try S3 first
+    try:
+        storage = get_storage_manager().get_storage()
+        
+        # Check for example images in S3
+        # Note: This is a simple implementation - you may need to implement list_files in storage
+        example_prefixes = ["example_images/"]
+        
+        # Known example images (you can expand this list)
+        known_examples = [
+            "example_1.jpg",
+            "example_2.jpg", 
+            "example_3.jpg",
+            "sample_camera.jpg",
+            "sample_building.jpg",
+            "sample_person.jpg",
+        ]
+        
+        for filename in known_examples:
+            s3_path = f"example_images/{filename}"
+            if storage.file_exists(s3_path):
+                # Use filename without extension as display name
+                display_name = Path(filename).stem.replace("_", " ").title()
+                example_images[display_name] = s3_path
+                
+    except Exception as e:
+        st.warning(f"No se pudieron cargar imágenes de ejemplo desde S3: {e}")
+    
+    # Fallback to local directory if no S3 images found
+    if not example_images:
+        local_dir = Path("data/example_images")
+        if local_dir.exists():
+            for img_file in local_dir.glob("*.[jp][pn][g]*"):
+                display_name = img_file.stem.replace("_", " ").title()
+                example_images[display_name] = str(img_file)
+    
+    return example_images
+
+
 def render_search_interface() -> Optional[Dict[str, Any]]:
     """
     Render the search input interface and return query configuration.
@@ -160,37 +210,44 @@ def _render_image_search() -> Optional[Dict[str, Any]]:
 
     # Alternative: Use example images
     with st.expander("📷 Usar imágenes de ejemplo"):
-        example_images_dir = Path("input_image_for_search")
-        if example_images_dir.exists():
-            example_images = (
-                list(example_images_dir.glob("*.jpg"))
-                + list(example_images_dir.glob("*.jpeg"))
-                + list(example_images_dir.glob("*.png"))
+        example_images = _get_example_images()
+
+        if example_images:
+            selected_example = st.selectbox(
+                "Selecciona una imagen de ejemplo:",
+                options=[None] + list(example_images.keys()),
+                format_func=lambda x: "Ninguna" if x is None else x,
             )
 
-            if example_images:
-                selected_example = st.selectbox(
-                    "Selecciona una imagen de ejemplo:",
-                    options=[None] + example_images,
-                    format_func=lambda x: "Ninguna" if x is None else x.name,
-                )
-
-                if selected_example:
-                    col1, col2, col3 = st.columns([1, 2, 1])
-                    with col2:
-                        st.image(
-                            str(selected_example),
-                            caption=f"Ejemplo: {selected_example.name}",
-                            use_container_width=True,
-                        )
-
-                    if st.button("Usar esta imagen"):
-                        st.session_state.selected_image_path = str(selected_example)
-                        st.rerun()
-            else:
-                st.info("No hay imágenes de ejemplo disponibles")
+            if selected_example:
+                example_path = example_images[selected_example]
+                
+                # Download and show preview
+                try:
+                    import tempfile
+                    from ...storage import get_storage_manager
+                    
+                    # Download to temp file for display
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                        storage = get_storage_manager().get_storage()
+                        if storage.download_file(example_path, tmp.name):
+                            col1, col2, col3 = st.columns([1, 2, 1])
+                            with col2:
+                                st.image(
+                                    tmp.name,
+                                    caption=f"Ejemplo: {selected_example}",
+                                    use_container_width=True,
+                                )
+                            
+                            if st.button("Usar esta imagen"):
+                                st.session_state.selected_image_path = tmp.name
+                                st.rerun()
+                        else:
+                            st.error("No se pudo cargar la imagen de ejemplo")
+                except Exception as e:
+                    st.error(f"Error cargando imagen: {e}")
         else:
-            st.info("Directorio de imágenes de ejemplo no encontrado")
+            st.info("No hay imágenes de ejemplo disponibles")
 
     # Use session state image path if no upload
     if image_path is None and st.session_state.selected_image_path:

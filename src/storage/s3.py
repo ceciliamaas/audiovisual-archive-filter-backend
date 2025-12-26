@@ -85,28 +85,56 @@ class S3Storage(StorageBackend):
                 raise e
 
     def upload_file(self, local_path: Union[str, Path], remote_path: str) -> bool:
-        """Upload a file to S3/Storj"""
+        """Upload a file using direct HTTP requests (better Storj compatibility)"""
         try:
             local_path = Path(local_path)
             if not local_path.exists():
                 logger.error(f"File not found: {local_path}")
                 return False
 
-            # Read file and use BytesIO to avoid Content-Length issues with Storj
             with open(local_path, "rb") as f:
                 file_content = f.read()
 
-            file_stream = BytesIO(file_content)
+            # Create headers for direct HTTP upload with AWS Signature v2
+            date_string = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
+            headers = {
+                "Date": date_string,
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(file_content)),
+            }
 
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=remote_path,
-                Body=file_stream,
-                ContentType="application/octet-stream",
+            # URL encode the remote path for the URL
+            from urllib.parse import quote
+            encoded_path = quote(remote_path, safe='/')
+            
+            # Create resource and signature (AWS Signature v2 for Storj)
+            # For signature, use the URL-encoded path
+            resource = f"/{self.bucket_name}/{encoded_path}"
+            canonical_string = (
+                f"PUT\n\napplication/octet-stream\n{date_string}\n{resource}"
+            )
+            signature = base64.b64encode(
+                hmac.new(
+                    self.secret_key.encode(), canonical_string.encode(), hashlib.sha1
+                ).digest()
+            ).decode()
+
+            headers["Authorization"] = f"AWS {self.access_key}:{signature}"
+
+            # Upload using requests library with encoded path
+            url = f"{self.endpoint_url}/{self.bucket_name}/{encoded_path}"
+            response = requests.put(
+                url, data=file_content, headers=headers, timeout=120
             )
 
-            logger.info(f"Uploaded {local_path.name} to {remote_path}")
-            return True
+            if response.status_code in [200, 201, 204]:
+                logger.info(f"Uploaded {local_path.name} to {remote_path}")
+                return True
+            else:
+                logger.error(
+                    f"Upload failed: {response.status_code} - {response.text}"
+                )
+                return False
 
         except Exception as e:
             logger.error(f"Error uploading {local_path}: {e}")

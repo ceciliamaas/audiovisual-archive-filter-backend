@@ -27,9 +27,9 @@ from PIL import Image
 from dotenv import load_dotenv
 import replicate
 
-# Add src to path for storage imports
+# Add project root to path for imports
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.storage import get_storage_manager
 
@@ -147,16 +147,16 @@ def save_embeddings_to_s3(
 
         print(f"📤 Uploading {embedding_type} embeddings to S3...")
 
-        # Upload embeddings
-        with open(temp_embeddings_file, "rb") as f:
-            storage.put(embeddings_file, f.read())
+        # Upload embeddings using upload_file method
+        success_embeddings = storage.upload_file(temp_embeddings_file, embeddings_file)
+        success_paths = storage.upload_file(temp_paths_file, paths_file)
 
-        # Upload paths
-        with open(temp_paths_file, "rb") as f:
-            storage.put(paths_file, f.read())
-
-        print(f"✅ Uploaded {embedding_type} embeddings ({len(embeddings)} items)")
-        return True
+        if success_embeddings and success_paths:
+            print(f"✅ Uploaded {embedding_type} embeddings ({len(embeddings)} items)")
+            return True
+        else:
+            print(f"❌ Failed to upload {embedding_type} embeddings")
+            return False
 
     except Exception as e:
         print(f"❌ Failed to save {embedding_type} embeddings to S3: {e}")
@@ -168,13 +168,16 @@ def save_embeddings_to_s3(
 # =============================================================================
 
 
-def process_frames(storage, force_recompute: bool = False) -> bool:
+def process_frames(
+    storage, force_recompute: bool = False, video_filter: str = None
+) -> bool:
     """
     Process all frame images to compute embeddings
 
     Args:
         storage: Storage manager instance
         force_recompute: If True, recompute all embeddings
+        video_filter: If provided, only process frames from this video directory
 
     Returns:
         True if successful
@@ -190,6 +193,9 @@ def process_frames(storage, force_recompute: bool = False) -> bool:
     frame_files = []
     for video_dir in FRAMES_DIR.glob("video_*"):
         if video_dir.is_dir():
+            # Apply video filter if specified
+            if video_filter and video_dir.name != video_filter:
+                continue
             for frame_file in video_dir.glob("*.jpg"):
                 frame_files.append(frame_file)
 
@@ -243,13 +249,16 @@ def process_frames(storage, force_recompute: bool = False) -> bool:
     return save_embeddings_to_s3(storage, frame_embeddings, frame_paths, "frame")
 
 
-def process_objects(storage, force_recompute: bool = False) -> bool:
+def process_objects(
+    storage, force_recompute: bool = False, video_filter: str = None
+) -> bool:
     """
     Process all object images to compute embeddings
 
     Args:
         storage: Storage manager instance
         force_recompute: If True, recompute all embeddings
+        video_filter: If provided, only process objects from this video directory
 
     Returns:
         True if successful
@@ -265,6 +274,9 @@ def process_objects(storage, force_recompute: bool = False) -> bool:
     object_files = []
     for video_dir in OBJECTS_DIR.glob("video_*"):
         if video_dir.is_dir():
+            # Apply video filter if specified
+            if video_filter and video_dir.name != video_filter:
+                continue
             for object_file in video_dir.glob("*.jpg"):
                 object_files.append(object_file)
 
@@ -337,25 +349,31 @@ def main():
     parser.add_argument(
         "--force", action="store_true", help="Force recompute all embeddings"
     )
+    parser.add_argument(
+        "--video",
+        type=str,
+        help="Process only frames from this video (e.g., 'video_reconstrucción_jonathan')",
+    )
 
     args = parser.parse_args()
 
     print("🧠 Starting CLIP embeddings computation...")
 
-    # Initialize storage manager
-    storage = get_storage_manager()
-    print(f"📦 Using storage: {storage.get_storage().get_info()['backend_type']}")
+    # Initialize storage manager and get backend
+    storage_manager = get_storage_manager()
+    storage = storage_manager.get_storage()
+    print(f"📦 Using storage: {storage.get_info()['backend_type']}")
 
     success = True
 
     # Process frames (unless objects-only)
     if not args.objects_only:
-        if not process_frames(storage, args.force):
+        if not process_frames(storage, args.force, args.video):
             success = False
 
     # Process objects (unless frames-only)
     if not args.frames_only:
-        if not process_objects(storage, args.force):
+        if not process_objects(storage, args.force, args.video):
             success = False
 
     if success:

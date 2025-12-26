@@ -25,9 +25,9 @@ from PIL import Image
 from dotenv import load_dotenv
 import replicate
 
-# Add src to path for storage imports
+# Add project root to path for imports
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.storage import get_storage_manager
 
@@ -56,11 +56,11 @@ OBJECTS_DIR.mkdir(parents=True, exist_ok=True)
 # TARGET_VIDEOS = None                    # Process all videos
 # TARGET_VIDEOS = ["video_CH27"]          # Process only CH27
 # TARGET_VIDEOS = ["video_1", "video_2"]  # Process specific videos
-TARGET_VIDEOS = ["video_CH205"]  # Currently targeting video 1
+TARGET_VIDEOS = ["video_reconstrucción_jonathan"]  # Currently targeting new video
 
 # YOLO classes to detect (can be customized)
 # Try with most common YOLO classes
-YOLO_CLASSES = ["person", "car", "building"]
+YOLO_CLASSES = ["person", "gun", "backpack", "hat", "building", "car"]
 
 # =============================================================================
 # YOLO Detection Functions
@@ -87,6 +87,7 @@ def detect_objects_yolo(image_path: Path, classes: List[str]) -> List[Dict]:
                     "classes": ",".join(classes),
                     "confidence_threshold": 0.01,  # Extremely low threshold
                     "iou_threshold": 0.3,  # Low IOU threshold
+                    "return_json": True,  # CRITICAL: Request JSON output explicitly
                 },
             )
 
@@ -99,8 +100,18 @@ def detect_objects_yolo(image_path: Path, classes: List[str]) -> List[Dict]:
         # Check for different possible output formats
         if "detections" in output:
             return parse_yolo_output(output["detections"])
-        elif "json_str" in output and output["json_str"]:
-            return parse_yolo_output(output["json_str"])
+        elif "json_str" in output:
+            json_str = output["json_str"]
+            print(
+                f"  Debug: json_str content: {json_str[:500] if json_str else 'None'}"
+            )
+            if json_str:
+                result = parse_yolo_output(json_str)
+                print(f"  Debug: Parsed {len(result)} detections")
+                return result
+            else:
+                print(f"  Debug: json_str is empty or None")
+                return []
         else:
             print(f"  Debug: No detections found in output")
             return []
@@ -256,9 +267,10 @@ def main():
     """Main processing function"""
     print("🎯 Starting YOLO object detection and cropping...")
 
-    # Initialize storage manager
-    storage = get_storage_manager()
-    print(f"📦 Using storage: {storage.get_storage().get_info()['backend_type']}")
+    # Initialize storage manager and get backend
+    storage_manager = get_storage_manager()
+    storage = storage_manager.get_storage()
+    print(f"📦 Using storage: {storage.get_info()['backend_type']}")
 
     # Find frame images based on target configuration
     if not FRAMES_DIR.exists():
@@ -327,10 +339,9 @@ def main():
             # Use relative path from objects directory for storage key
             relative_path = obj_file.relative_to(OBJECTS_DIR)
             storage_key = f"objects/{relative_path}"
-            with open(obj_file, "rb") as f:
-                success = storage.put(storage_key, f.read())
-                if success:
-                    uploaded += 1
+            success = storage.upload_file(str(obj_file), storage_key)
+            if success:
+                uploaded += 1
 
         print(f"✅ Uploaded {uploaded} objects to S3")
 

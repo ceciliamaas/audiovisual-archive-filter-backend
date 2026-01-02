@@ -7,6 +7,7 @@ Process any video through the complete pipeline with a single command!
 ## 📋 Prerequisites
 
 1. **Environment variables** in `.env`:
+
    ```
    REPLICATE_API_TOKEN=your_token_here
    STORAGE_MODE=s3-only  # or local-only, hybrid, auto
@@ -90,6 +91,7 @@ python -m scripts.pipeline list
 ```
 
 Output:
+
 ```
 Found 3 video(s):
 
@@ -107,6 +109,7 @@ python -m scripts.pipeline status "my_video"
 ```
 
 Output:
+
 ```
 Video: my_video
 Status: completed
@@ -135,6 +138,7 @@ python -m scripts.pipeline resume "my_video"
 ```
 
 The pipeline automatically:
+
 - ✅ Skips completed steps
 - ✅ Continues from last successful step
 - ✅ Preserves all progress
@@ -148,6 +152,7 @@ python -m scripts.pipeline validate "my_video"
 ```
 
 Output:
+
 ```
 Validating: my_video
 Status: completed
@@ -187,6 +192,7 @@ python -m scripts.pipeline list
 For a video named `my_video`, the pipeline creates:
 
 ### Local Files
+
 ```
 data/
 ├── videos/
@@ -211,6 +217,7 @@ data/
 ```
 
 ### S3 Files (if STORAGE_MODE includes S3)
+
 ```
 s3://your-bucket/
 ├── videos/
@@ -241,6 +248,7 @@ The pipeline runs these steps in order:
 5. **Upload** - Store everything to S3 (if configured)
 
 Each step:
+
 - ✅ Validates input before running
 - ✅ Validates output after completing
 - ✅ Can be skipped if already completed
@@ -250,28 +258,35 @@ Each step:
 ## ⚠️ Troubleshooting
 
 ### "REPLICATE_API_TOKEN not set"
+
 Add to `.env`:
+
 ```
 REPLICATE_API_TOKEN=your_token_here
 ```
 
 ### "Video file not created"
+
 Check:
+
 - YouTube URL is valid
 - Google Drive file is shared publicly
 - Local path exists
 
 ### Processing is slow
+
 - YOLO detection: ~1-2 seconds per frame (API call)
 - CLIP embeddings: ~0.5 seconds per image (API call)
 - For 240 frames + 1500 objects: expect 30-45 minutes total
 
 ### Resume after failure
+
 ```bash
 python -m scripts.pipeline resume "my_video"
 ```
 
 ### Force complete reprocessing
+
 ```bash
 python -m scripts.pipeline process "my_video" \
     --source youtube \

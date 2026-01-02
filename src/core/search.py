@@ -138,8 +138,13 @@ class EmbeddingsManager:
                 )
 
                 # Map to storage paths - if object_paths_dict is a dict, use its values
+                # If it's already a list, use it directly (it's already in the correct format)
                 if isinstance(object_paths_dict, dict):
                     object_paths = [object_paths_dict[key] for key in object_keys]
+                elif isinstance(object_paths_dict, list):
+                    # Already in correct list format
+                    object_paths = object_paths_dict
+                    logger.info(f"Using pre-formatted object paths list with {len(object_paths)} items")
                 else:
                     # Fallback: construct correct object paths
                     # Object keys might be: video_1/video_1_frame_00367_obj_2.jpg

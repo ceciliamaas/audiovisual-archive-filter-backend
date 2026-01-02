@@ -24,6 +24,8 @@ dependencies = [
     "opencv-python>=4.5.0",
     "ultralytics>=8.0.0",
     "requests>=2.28.0",
+    "tqdm>=4.65.0",
+    "qdrant-client>=1.7.0",
 ]
 
 [project.optional-dependencies]

@@ -105,8 +105,9 @@ class S3Storage(StorageBackend):
 
             # URL encode the remote path for the URL
             from urllib.parse import quote
-            encoded_path = quote(remote_path, safe='/')
-            
+
+            encoded_path = quote(remote_path, safe="/")
+
             # Create resource and signature (AWS Signature v2 for Storj)
             # For signature, use the URL-encoded path
             resource = f"/{self.bucket_name}/{encoded_path}"
@@ -131,9 +132,7 @@ class S3Storage(StorageBackend):
                 logger.info(f"Uploaded {local_path.name} to {remote_path}")
                 return True
             else:
-                logger.error(
-                    f"Upload failed: {response.status_code} - {response.text}"
-                )
+                logger.error(f"Upload failed: {response.status_code} - {response.text}")
                 return False
 
         except Exception as e:

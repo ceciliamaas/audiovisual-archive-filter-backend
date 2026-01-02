@@ -6,6 +6,8 @@ Coordinates all pipeline steps and manages the workflow.
 
 from typing import Optional, Dict, Any, List
 from pathlib import Path
+from tqdm import tqdm
+import time
 
 from .state import PipelineState, VideoStatus
 from .naming import NamingConvention
@@ -83,16 +85,45 @@ class Pipeline:
         if steps:
             all_steps = [(name, cls) for name, cls in all_steps if name in steps]
 
-        # Run each step
-        for step_name, step_class in all_steps:
-            print(f"\n--- Step: {step_name} ---")
+        # Track timing for each step
+        step_times = {}
+        total_start = time.time()
 
-            step = step_class(state, self.config)
-            success = step.run(force=force)
+        # Run each step with progress bar
+        with tqdm(
+            total=len(all_steps),
+            desc=f"Pipeline: {video_name}",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} steps",
+        ) as pbar:
+            for step_name, step_class in all_steps:
+                pbar.set_description(f"Pipeline: {video_name} [{step_name}]")
 
-            if not success:
-                print(f"\n✗ Pipeline failed at step: {step_name}")
-                return False
+                print(f"\n--- Step: {step_name} ---")
+
+                step = step_class(state, self.config)
+
+                # Time the step execution
+                step_start = time.time()
+                success = step.run(force=force)
+                step_duration = time.time() - step_start
+                step_times[step_name] = step_duration
+
+                if not success:
+                    print(f"\n✗ Pipeline failed at step: {step_name}")
+                    pbar.close()
+                    return False
+
+                # Display step timing
+                minutes = int(step_duration // 60)
+                seconds = int(step_duration % 60)
+                print(f"⏱️  Step completed in: {minutes}m {seconds}s")
+
+                pbar.update(1)
+
+        # Calculate total time
+        total_duration = time.time() - total_start
+        total_minutes = int(total_duration // 60)
+        total_seconds = int(total_duration % 60)
 
         # Success!
         print(f"\n{'='*60}")
@@ -102,6 +133,12 @@ class Pipeline:
         print(f"Frames: {state.frame_count}")
         print(f"Objects: {state.object_count}")
         print(f"Steps: {', '.join(state.steps_completed)}")
+        print(f"\n⏱️  Timing Summary:")
+        for step_name, duration in step_times.items():
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            print(f"   {step_name:20s}: {mins}m {secs}s")
+        print(f"   {'Total':20s}: {total_minutes}m {total_seconds}s")
         print()
 
         return True

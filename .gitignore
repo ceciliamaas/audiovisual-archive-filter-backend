@@ -179,8 +179,20 @@ app/embeddings/
 # ========================================
 node_modules/
 
+# ========================================
+# Docker
+# ========================================
+qdrant_storage/
+.docker/
 
+# Keep Docker config files tracked
+!docker-compose.yml
+!Dockerfile
+!.dockerignore
 
+# ========================================
+# Model files
+# ========================================
 *.pt
 *.onnx
 *.engine

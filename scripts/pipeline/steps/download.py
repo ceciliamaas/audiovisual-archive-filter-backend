@@ -159,19 +159,14 @@ class DownloadStep(PipelineStep):
             video_path.unlink()
 
         # Download with specific filename
-        # Format priority:
-        # 1. Best video+audio in mp4/m4a
-        # 2. Best video+audio (any format, will be converted)
-        # 3. Best combined format with video
-        # Note: We explicitly require video with [vcodec!=none]
+        # Format selection strategy: Try to get best quality with video
+        # Fallback chain ensures we always get video content
         ydl_opts = {
-            "format": "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a]/bestvideo[vcodec!=none]+bestaudio/best[vcodec!=none]/best",
+            "format": "bv*+ba/b",  # Best video+audio, fallback to best single file with video
             "merge_output_format": "mp4",
-            "postprocessors": [
-                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
-            ],
             "outtmpl": str(video_path.with_suffix("")),  # Remove .mp4, yt-dlp adds it
             "quiet": False,
+            "no_warnings": False,
         }
 
         print(f"    Downloading from YouTube: {self.state.source_url}")

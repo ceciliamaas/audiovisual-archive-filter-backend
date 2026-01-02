@@ -1,0 +1,70 @@
+# Python cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Data files (large)
+data/videos/
+data/frames/
+data/objects/
+data/pipeline_state/
+
+# Keep example images
+!data/example_images/
+
+# Embeddings (will be in Qdrant)
+data/embeddings/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Test outputs
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Environment files (secrets)
+.env
+.env.local
+
+# Docker storage
+qdrant_storage/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+docs/
+
+# Docker config files to keep
+!docker-compose.yml
+!Dockerfile
+!.dockerignore

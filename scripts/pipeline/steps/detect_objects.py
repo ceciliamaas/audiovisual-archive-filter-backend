@@ -8,8 +8,11 @@ import os
 import json
 import cv2
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
+from tqdm import tqdm
+import time
 
 from .base import PipelineStep
 from ..state import VideoStatus
@@ -20,6 +23,9 @@ load_dotenv()
 
 class DetectObjectsStep(PipelineStep):
     """Detect objects in frames using YOLO."""
+
+    MAX_WORKERS = 10  # Number of concurrent API requests
+    RETRY_DELAYS = [5, 10, 15]  # Retry delays in seconds for rate limit errors
 
     @property
     def step_name(self) -> str:
@@ -113,84 +119,133 @@ class DetectObjectsStep(PipelineStep):
         print(
             f"    Processing {frames_to_process} remaining frames (skipping {len(processed_frame_indices)} already done)"
         )
+        print(f"    Using {self.MAX_WORKERS} concurrent workers...")
 
-        processed = 0
-        for i, frame_path in enumerate(frame_files):
+        # Prepare frames to process
+        frames_todo = []
+        for frame_path in frame_files:
             frame_index = NamingConvention.parse_frame_index(frame_path.name)
-            if frame_index is None:
+            if frame_index is None or frame_index in processed_frame_indices:
                 continue
+            frames_todo.append((frame_path, frame_index))
 
-            # Skip if already processed
-            if frame_index in processed_frame_indices:
-                continue
+        def process_frame(
+            frame_data: Tuple[Path, int],
+        ) -> Tuple[int, List[Tuple[int, int, int, int]], Optional[str]]:
+            """Process a single frame with YOLO detection and retry logic."""
+            frame_path, frame_index = frame_data
 
-            processed += 1
-            print(
-                f"    Processing frame {processed}/{frames_to_process} (total: {i+1}/{total_frames})...",
-                end="\r",
-            )
+            for retry_count, delay in enumerate([0] + self.RETRY_DELAYS):
+                if delay > 0:
+                    time.sleep(delay)
 
-            try:
-                # Run YOLO detection
-                with open(frame_path, "rb") as f:
-                    output = client.run(
-                        "franz-biz/yolo-world-xl:fd1305d3fc19e81540542f51c2530cf8f393e28cc6ff4976337c3e2b75c7c292",
-                        input={
-                            "input_media": f,
-                            "classes": ",".join(classes),
-                            "confidence_threshold": confidence,
-                            "iou_threshold": iou,
-                            "return_json": True,
-                        },
+                try:
+                    # Run YOLO detection
+                    with open(frame_path, "rb") as f:
+                        output = client.run(
+                            "franz-biz/yolo-world-xl:fd1305d3fc19e81540542f51c2530cf8f393e28cc6ff4976337c3e2b75c7c292",
+                            input={
+                                "input_media": f,
+                                "classes": ",".join(classes),
+                                "confidence_threshold": confidence,
+                                "iou_threshold": iou,
+                                "return_json": True,
+                            },
+                        )
+
+                    # Parse the new API response format
+                    if not output or "json_str" not in output:
+                        return (frame_index, [], None)
+
+                    # Parse JSON string to get detections
+                    detections_dict = json.loads(output["json_str"])
+                    if not detections_dict:
+                        return (frame_index, [], None)
+
+                    # Filter detections to only include specified classes
+                    allowed_classes = set(classes)
+                    valid_detections = [
+                        det
+                        for det in detections_dict.values()
+                        if det.get("cls") in allowed_classes
+                    ]
+
+                    if not valid_detections:
+                        return (frame_index, [], None)
+
+                    # Extract bounding boxes
+                    bboxes = []
+                    for det in valid_detections:
+                        x1 = int(det.get("x0", 0))
+                        y1 = int(det.get("y0", 0))
+                        x2 = int(det.get("x1", 0))
+                        y2 = int(det.get("y1", 0))
+
+                        if x1 < x2 and y1 < y2:
+                            bboxes.append((x1, y1, x2, y2))
+
+                    return (frame_index, bboxes, None)
+
+                except Exception as e:
+                    error_str = str(e)
+                    # Check if it's a rate limit error (429)
+                    if "429" in error_str or "throttled" in error_str.lower():
+                        if retry_count < len(self.RETRY_DELAYS):
+                            continue  # Retry with next delay
+                    # For other errors or exhausted retries, return error
+                    return (frame_index, [], error_str)
+
+            return (frame_index, [], "Max retries exceeded")
+
+        # Process frames concurrently with progress bar
+        errors = 0
+        new_objects = 0
+
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+            futures = {
+                executor.submit(process_frame, frame_data): frame_data
+                for frame_data in frames_todo
+            }
+
+            with tqdm(
+                total=len(frames_todo),
+                desc="    Detecting objects",
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+            ) as pbar:
+                for future in as_completed(futures):
+                    frame_data = futures[future]
+                    frame_path, frame_index = frame_data
+                    frame_index_result, bboxes, error = future.result()
+
+                    if error:
+                        errors += 1
+                        if errors <= 5:
+                            tqdm.write(
+                                f"    Error processing frame {frame_index}: {error}"
+                            )
+                    elif bboxes:
+                        # Crop and save each detection
+                        frame_img = cv2.imread(str(frame_path))
+                        for obj_idx, (x1, y1, x2, y2) in enumerate(bboxes):
+                            cropped = frame_img[y1:y2, x1:x2]
+                            if cropped.size == 0:
+                                continue
+
+                            # Save object
+                            object_path = NamingConvention.object_local_path(
+                                self.video_name, frame_index, obj_idx
+                            )
+                            cv2.imwrite(str(object_path), cropped)
+                            new_objects += 1
+
+                    total_objects = len(list(objects_dir.glob("frame_*_obj_*.jpg")))
+                    pbar.set_postfix(
+                        objects=total_objects, errors=errors, refresh=False
                     )
+                    pbar.update(1)
 
-                # Parse the new API response format
-                if not output or "json_str" not in output:
-                    continue
-
-                # Parse JSON string to get detections
-                detections_dict = json.loads(output["json_str"])
-                if not detections_dict:
-                    continue
-
-                # Filter detections to only include specified classes
-                allowed_classes = set(classes)
-                valid_detections = [
-                    det
-                    for det in detections_dict.values()
-                    if det.get("cls") in allowed_classes
-                ]
-
-                if not valid_detections:
-                    continue
-
-                # Crop and save each detection
-                frame_img = cv2.imread(str(frame_path))
-                for obj_idx, det in enumerate(valid_detections):
-                    # Extract bounding box coordinates
-                    x1 = int(det.get("x0", 0))
-                    y1 = int(det.get("y0", 0))
-                    x2 = int(det.get("x1", 0))
-                    y2 = int(det.get("y1", 0))
-
-                    if x1 >= x2 or y1 >= y2:
-                        continue
-
-                    # Crop object
-                    cropped = frame_img[y1:y2, x1:x2]
-                    if cropped.size == 0:
-                        continue
-
-                    # Save object
-                    object_path = NamingConvention.object_local_path(
-                        self.video_name, frame_index, obj_idx
-                    )
-                    cv2.imwrite(str(object_path), cropped)
-                    total_objects += 1
-
-            except Exception as e:
-                print(f"    Error processing frame {frame_index}: {e}")
-                continue
+        # Count final objects
+        total_objects = len(list(objects_dir.glob("frame_*_obj_*.jpg")))
 
         # Update state
         self.state.object_count = total_objects

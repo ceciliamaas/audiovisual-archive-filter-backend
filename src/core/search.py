@@ -1,10 +1,9 @@
 """
 Core search functionality for the audiovisual archive.
-Handles CLIP-based similarity search for both frames and objects.
+Handles CLIP-based similarity search for both frames and objects using Qdrant.
 """
 
 import os
-import pickle
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any, Union
@@ -18,6 +17,7 @@ load_dotenv()
 
 from ..config.settings import app_config
 from ..storage import get_storage_manager
+from ..storage.qdrant import QdrantStorage
 
 logger = logging.getLogger(__name__)
 
@@ -59,204 +59,64 @@ class SearchResult:
 
 
 class EmbeddingsManager:
-    """Manages loading and caching of embeddings from storage"""
+    """Manages embeddings using Qdrant vector database"""
 
     def __init__(self):
         self.storage_manager = get_storage_manager()
-        self._frame_embeddings: Optional[np.ndarray] = None
-        self._object_embeddings: Optional[np.ndarray] = None
-        self._frame_paths: Optional[List[str]] = None
-        self._object_paths: Optional[List[str]] = None
+        self.qdrant = QdrantStorage()
         self._embeddings_loaded = False
 
     def load_embeddings(self, force_reload: bool = False) -> bool:
-        """Load embeddings from storage"""
+        """Check if embeddings are available in Qdrant"""
         if self._embeddings_loaded and not force_reload:
             return True
 
         try:
-            storage = self.storage_manager.get_storage()
+            # Check if collections have data
+            frames_info = self.qdrant.get_collection_info(
+                QdrantStorage.FRAMES_COLLECTION
+            )
+            objects_info = self.qdrant.get_collection_info(
+                QdrantStorage.OBJECTS_COLLECTION
+            )
 
-            # Try to download embeddings files
-            embedding_files = {
-                "frame_embeddings": "embeddings/frame_embeddings.pkl",
-                "object_embeddings": "embeddings/object_embeddings.pkl",
-                "frame_paths": "embeddings/frame_paths.pkl",
-                "object_paths": "embeddings/object_paths.pkl",
-            }
-
-            data = {}
-            for key, remote_path in embedding_files.items():
-                if storage.file_exists(remote_path):
-                    data[key] = storage.download_pickle(remote_path)
-                    if data[key] is None:
-                        logger.error(f"Failed to load {key} from {remote_path}")
-                        return False
-                else:
-                    logger.error(f"Embedding file not found: {remote_path}")
-                    return False
-
-            # Convert dictionary format to array format if needed
-            frame_embeddings_dict = data["frame_embeddings"]
-            object_embeddings_dict = data["object_embeddings"]
-            frame_paths_dict = data["frame_paths"]
-            object_paths_dict = data["object_paths"]
-
-            if isinstance(frame_embeddings_dict, dict):
-                # Convert dict format to arrays
-                # Use the storage keys from frame_paths_dict, not the dict keys
-                frame_keys = list(frame_embeddings_dict.keys())
-                frame_embeddings = np.vstack(
-                    [frame_embeddings_dict[path] for path in frame_keys]
+            if frames_info.get("points_count", 0) > 0:
+                logger.info(
+                    f"Using Qdrant: {frames_info['points_count']} frames, {objects_info.get('points_count', 0)} objects"
                 )
-
-                # Map to storage paths - if frame_paths_dict is a dict, use its values
-                if isinstance(frame_paths_dict, dict):
-                    frame_paths = [frame_paths_dict[key] for key in frame_keys]
-                else:
-                    # Fallback: add frames/ prefix
-                    frame_paths = [f"frames/{key}" for key in frame_keys]
-
-                self._frame_embeddings = frame_embeddings
-                self._frame_paths = frame_paths
+                self._embeddings_loaded = True
+                return True
             else:
-                # Already in array format
-                self._frame_embeddings = frame_embeddings_dict
-                self._frame_paths = (
-                    frame_paths_dict
-                    if isinstance(frame_paths_dict, list)
-                    else list(frame_paths_dict.values())
+                logger.error(
+                    "Qdrant collections are empty. Please run the pipeline to generate embeddings."
                 )
-
-            if isinstance(object_embeddings_dict, dict):
-                # Convert dict format to arrays
-                logger.info("Object embeddings are in dict format")
-                # Use the storage keys from object_paths_dict, not the dict keys
-                object_keys = list(object_embeddings_dict.keys())
-                object_embeddings = np.vstack(
-                    [object_embeddings_dict[path] for path in object_keys]
-                )
-
-                # Map to storage paths - if object_paths_dict is a dict, use its values
-                # If it's already a list, use it directly (it's already in the correct format)
-                if isinstance(object_paths_dict, dict):
-                    object_paths = [object_paths_dict[key] for key in object_keys]
-                elif isinstance(object_paths_dict, list):
-                    # Already in correct list format
-                    object_paths = object_paths_dict
-                    logger.info(f"Using pre-formatted object paths list with {len(object_paths)} items")
-                else:
-                    # Fallback: construct correct object paths
-                    # Object keys might be: video_1/video_1_frame_00367_obj_2.jpg
-                    # OR just: video_1_frame_00367_obj_2.jpg
-                    # S3 paths should be: objects/video_1/frame_00367_obj_2.jpg
-                    object_paths = []
-                    for key in object_keys:
-                        parts = key.split("/")
-                        if len(parts) == 2:
-                            video_dir = parts[0]  # e.g., video_1
-                            filename = parts[1]  # e.g., video_1_frame_00367_obj_2.jpg
-                            # Remove video_X_ prefix from filename
-                            if filename.startswith(f"{video_dir}_"):
-                                filename = filename[
-                                    len(video_dir) + 1 :
-                                ]  # Remove "video_1_"
-                            object_paths.append(f"objects/{video_dir}/{filename}")
-                        else:
-                            # Key format: video_1_frame_00367_obj_2.jpg (no directory prefix)
-                            # Need to extract video_X from filename
-                            filename = key
-                            # Extract video number: video_1, video_2, etc.
-                            if filename.startswith("video_") and "_frame_" in filename:
-                                # Split to get video_X part
-                                video_part = filename.split("_frame_")[
-                                    0
-                                ]  # e.g., video_1
-                                frame_part = filename.split("_frame_")[
-                                    1
-                                ]  # e.g., 00367_obj_2.jpg
-                                # Construct proper path
-                                object_paths.append(
-                                    f"objects/{video_part}/frame_{frame_part}"
-                                )
-                            else:
-                                # Last resort fallback
-                                logger.warning(f"Unexpected object key format: {key}")
-                                object_paths.append(f"objects/{key}")
-
-                self._object_embeddings = object_embeddings
-                self._object_paths = object_paths
-            else:
-                # Already in array format
-                logger.info("Object embeddings are in array format")
-                logger.info(f"Object paths type: {type(object_paths_dict)}")
-                self._object_embeddings = object_embeddings_dict
-                # Use paths as-is since they should already be fixed
-                if isinstance(object_paths_dict, list):
-                    self._object_paths = object_paths_dict
-                    logger.info(f"Loaded {len(self._object_paths)} object paths")
-                    logger.info(f"Sample object paths: {self._object_paths[:3]}")
-                else:
-                    logger.info("Object paths are not a list, converting...")
-                    self._object_paths = list(object_paths_dict.values())
-                    logger.info(f"Converted {len(self._object_paths)} object paths")
-                    logger.info(f"Sample object paths: {self._object_paths[:3]}")
-
-            self._embeddings_loaded = True
-            logger.info("Successfully loaded embeddings from storage")
-            return True
-
+                return False
         except Exception as e:
-            logger.error(f"Failed to load embeddings: {e}")
+            logger.error(f"Error checking Qdrant collections: {e}")
             return False
 
-    @property
-    def frame_embeddings(self) -> Optional[np.ndarray]:
-        """Get frame embeddings, loading if necessary"""
-        if not self._embeddings_loaded:
-            self.load_embeddings()
-        return self._frame_embeddings
-
-    @property
-    def object_embeddings(self) -> Optional[np.ndarray]:
-        """Get object embeddings, loading if necessary"""
-        if not self._embeddings_loaded:
-            self.load_embeddings()
-        return self._object_embeddings
-
-    @property
-    def frame_paths(self) -> Optional[List[str]]:
-        """Get frame paths, loading if necessary"""
-        if not self._embeddings_loaded:
-            self.load_embeddings()
-        return self._frame_paths
-
-    @property
-    def object_paths(self) -> Optional[List[str]]:
-        """Get object paths, loading if necessary"""
-        if not self._embeddings_loaded:
-            self.load_embeddings()
-        return self._object_paths
-
     def get_status(self) -> Dict[str, Any]:
-        """Get embeddings status information"""
-        return {
-            "loaded": self._embeddings_loaded,
-            "frame_count": (
-                len(self._frame_embeddings) if self._frame_embeddings is not None else 0
-            ),
-            "object_count": (
-                len(self._object_embeddings)
-                if self._object_embeddings is not None
-                else 0
-            ),
-            "frame_paths_count": (
-                len(self._frame_paths) if self._frame_paths is not None else 0
-            ),
-            "object_paths_count": (
-                len(self._object_paths) if self._object_paths is not None else 0
-            ),
-        }
+        """Get embeddings status information from Qdrant"""
+        try:
+            frames_info = self.qdrant.get_collection_info(
+                QdrantStorage.FRAMES_COLLECTION
+            )
+            objects_info = self.qdrant.get_collection_info(
+                QdrantStorage.OBJECTS_COLLECTION
+            )
+
+            return {
+                "loaded": self._embeddings_loaded,
+                "frame_count": frames_info.get("points_count", 0),
+                "object_count": objects_info.get("points_count", 0),
+            }
+        except Exception as e:
+            logger.error(f"Failed to get status: {e}")
+            return {
+                "loaded": False,
+                "frame_count": 0,
+                "object_count": 0,
+            }
 
 
 class SearchEngine:
@@ -335,27 +195,30 @@ class SearchEngine:
 
         results = []
 
-        # Search frames
-        if search_frames and self.embeddings_manager.frame_embeddings is not None:
-            frame_results = self._search_embeddings_array(
-                self.embeddings_manager.frame_embeddings,
-                self.embeddings_manager.frame_paths,
+        # Search using Qdrant
+        if search_frames:
+            frame_results = self.embeddings_manager.qdrant.search_frames(
                 query_embedding,
-                "frame",
-                max_results // 2 if search_objects else max_results,
+                limit=max_results // 2 if search_objects else max_results,
             )
-            results.extend(frame_results)
+            results.extend(
+                [
+                    SearchResult(path=path, similarity=score, result_type="frame")
+                    for path, score in frame_results
+                ]
+            )
 
-        # Search objects
-        if search_objects and self.embeddings_manager.object_embeddings is not None:
-            object_results = self._search_embeddings_array(
-                self.embeddings_manager.object_embeddings,
-                self.embeddings_manager.object_paths,
+        if search_objects:
+            object_results = self.embeddings_manager.qdrant.search_objects(
                 query_embedding,
-                "object",
-                max_results // 2 if search_frames else max_results,
+                limit=max_results // 2 if search_frames else max_results,
             )
-            results.extend(object_results)
+            results.extend(
+                [
+                    SearchResult(path=path, similarity=score, result_type="object")
+                    for path, score in object_results
+                ]
+            )
 
         # Sort by similarity and limit results
         results.sort(key=lambda x: x.similarity, reverse=True)
@@ -385,71 +248,34 @@ class SearchEngine:
 
         results = []
 
-        # Search frames
-        if search_frames and self.embeddings_manager.frame_embeddings is not None:
-            frame_results = self._search_embeddings_array(
-                self.embeddings_manager.frame_embeddings,
-                self.embeddings_manager.frame_paths,
+        # Search using Qdrant
+        if search_frames:
+            frame_results = self.embeddings_manager.qdrant.search_frames(
                 query_embedding,
-                "frame",
-                max_results // 2 if search_objects else max_results,
+                limit=max_results // 2 if search_objects else max_results,
             )
-            results.extend(frame_results)
+            results.extend(
+                [
+                    SearchResult(path=path, similarity=score, result_type="frame")
+                    for path, score in frame_results
+                ]
+            )
 
-        # Search objects
-        if search_objects and self.embeddings_manager.object_embeddings is not None:
-            object_results = self._search_embeddings_array(
-                self.embeddings_manager.object_embeddings,
-                self.embeddings_manager.object_paths,
+        if search_objects:
+            object_results = self.embeddings_manager.qdrant.search_objects(
                 query_embedding,
-                "object",
-                max_results // 2 if search_frames else max_results,
+                limit=max_results // 2 if search_frames else max_results,
             )
-            results.extend(object_results)
+            results.extend(
+                [
+                    SearchResult(path=path, similarity=score, result_type="object")
+                    for path, score in object_results
+                ]
+            )
 
         # Sort by similarity and limit results
         results.sort(key=lambda x: x.similarity, reverse=True)
         return results[:max_results]
-
-    def _search_embeddings_array(
-        self,
-        embeddings: np.ndarray,
-        paths: List[str],
-        query_embedding: np.ndarray,
-        result_type: str,
-        max_results: int,
-    ) -> List[SearchResult]:
-        """Search embeddings array and return sorted results"""
-        if embeddings is None or paths is None:
-            return []
-
-        # Compute similarities using vectorized operations
-        similarities = np.dot(embeddings, query_embedding)
-
-        # Get top results
-        indices = np.argsort(similarities)[::-1][:max_results]
-
-        # Filter by similarity threshold
-        threshold = app_config.similarity_threshold
-
-        results = []
-        for idx in indices:
-            similarity = float(similarities[idx])
-            if similarity >= threshold:
-                path = paths[idx]
-                if result_type == "object":
-                    logger.info(
-                        f"Returning object result: {path}, similarity: {similarity:.3f}"
-                    )
-                results.append(
-                    SearchResult(
-                        path=path,
-                        similarity=similarity,
-                        result_type=result_type,
-                    )
-                )
-
-        return results
 
     # Convenience methods for specific search types
     def search_frames(self, query: str, limit: int = 10) -> List[SearchResult]:

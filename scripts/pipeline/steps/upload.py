@@ -11,6 +11,8 @@ Uploads all video artifacts to S3 storage:
 import sys
 from pathlib import Path
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 
 from .base import PipelineStep
 from ..state import VideoStatus
@@ -19,6 +21,8 @@ from ..naming import NamingConvention
 
 class UploadStep(PipelineStep):
     """Upload all artifacts to S3."""
+
+    MAX_WORKERS = 10  # Number of concurrent uploads
 
     @property
     def step_name(self) -> str:
@@ -44,11 +48,7 @@ class UploadStep(PipelineStep):
         if not frames_dir.exists():
             return False, f"Frames directory not found: {frames_dir}"
 
-        # Embeddings
-        frame_emb_path = NamingConvention.frame_embeddings_local()
-        if not frame_emb_path.exists():
-            return False, f"Frame embeddings not found: {frame_emb_path}"
-
+        # Embeddings are now stored in Qdrant, not pickle files
         return True, None
 
     def execute(self) -> bool:
@@ -68,72 +68,73 @@ class UploadStep(PipelineStep):
             print(f"    Error uploading video")
             return False
 
-        # Upload frames
+        # Upload frames concurrently
         print("    Uploading frames...")
         frames_dir = NamingConvention.frames_dir_local(self.video_name)
         frame_files = list(frames_dir.glob("frame_*.jpg"))
-        for i, frame_path in enumerate(frame_files):
+
+        def upload_frame(frame_path):
+            """Upload a single frame."""
             frame_index = NamingConvention.parse_frame_index(frame_path.name)
             if frame_index is None:
-                continue
-
+                return False
             frame_key = NamingConvention.frame_s3_key(self.video_name, frame_index)
-            if not storage.upload_file(str(frame_path), frame_key):
-                print(f"    Warning: Failed to upload {frame_path.name}")
+            return storage.upload_file(str(frame_path), frame_key)
 
-            if (i + 1) % 10 == 0:
-                print(f"    Uploaded {i+1}/{len(frame_files)} frames...", end="\r")
+        failed_frames = 0
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+            futures = {executor.submit(upload_frame, fp): fp for fp in frame_files}
+            with tqdm(
+                total=len(frame_files),
+                desc="    Frames",
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+            ) as pbar:
+                for future in as_completed(futures):
+                    if not future.result():
+                        failed_frames += 1
+                    pbar.update(1)
 
-        print(f"    Uploaded {len(frame_files)} frames                ")
+        if failed_frames > 0:
+            print(f"    Warning: {failed_frames} frames failed to upload")
 
-        # Upload objects (if they exist)
+        # Upload objects concurrently (if they exist)
         objects_dir = NamingConvention.objects_dir_local(self.video_name)
         if objects_dir.exists():
             print("    Uploading objects...")
             object_files = list(objects_dir.glob("frame_*_obj_*.jpg"))
-            for i, obj_path in enumerate(object_files):
+
+            def upload_object(obj_path):
+                """Upload a single object."""
                 indices = NamingConvention.parse_object_indices(obj_path.name)
                 if indices is None:
-                    continue
-
+                    return False
                 frame_idx, obj_idx = indices
                 obj_key = NamingConvention.object_s3_key(
                     self.video_name, frame_idx, obj_idx
                 )
-                if not storage.upload_file(str(obj_path), obj_key):
-                    print(f"    Warning: Failed to upload {obj_path.name}")
+                return storage.upload_file(str(obj_path), obj_key)
 
-                if (i + 1) % 10 == 0:
-                    print(
-                        f"    Uploaded {i+1}/{len(object_files)} objects...", end="\r"
-                    )
+            failed_objects = 0
+            with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+                futures = {
+                    executor.submit(upload_object, op): op for op in object_files
+                }
+                with tqdm(
+                    total=len(object_files),
+                    desc="    Objects",
+                    bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+                ) as pbar:
+                    for future in as_completed(futures):
+                        if not future.result():
+                            failed_objects += 1
+                        pbar.update(1)
 
-            print(f"    Uploaded {len(object_files)} objects                ")
+            if failed_objects > 0:
+                print(f"    Warning: {failed_objects} objects failed to upload")
 
         # Upload embeddings
-        print("    Uploading embeddings...")
-
-        # Frame embeddings
-        frame_emb_path = NamingConvention.frame_embeddings_local()
-        frame_paths_path = NamingConvention.frame_paths_local()
-        storage.upload_file(
-            str(frame_emb_path), NamingConvention.frame_embeddings_s3_key()
-        )
-        storage.upload_file(
-            str(frame_paths_path), NamingConvention.frame_paths_s3_key()
-        )
-
-        # Object embeddings (if they exist)
-        obj_emb_path = NamingConvention.object_embeddings_local()
-        obj_paths_path = NamingConvention.object_paths_local()
-        if obj_emb_path.exists() and obj_paths_path.exists():
-            storage.upload_file(
-                str(obj_emb_path), NamingConvention.object_embeddings_s3_key()
-            )
-            storage.upload_file(
-                str(obj_paths_path), NamingConvention.object_paths_s3_key()
-            )
-
+        # Embeddings are now stored in Qdrant, no need to upload pickle files
+        print("    Embeddings stored in Qdrant (no S3 upload needed)")
         print("    Upload complete")
         return True
 

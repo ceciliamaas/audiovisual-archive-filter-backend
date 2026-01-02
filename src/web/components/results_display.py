@@ -109,17 +109,17 @@ def _render_object_with_frame(result: SearchResult) -> None:
         object_path = result.path
 
         # Get frame path from object path
-        # objects/video_1/frame_00367_obj_2.jpg -> frames/video_1/video_1_frame_00367.jpg
+        # objects/reconstruccion_jonathan/frame_00367_obj_2.jpg -> frames/reconstruccion_jonathan/frame_00367.jpg
         path_parts = Path(object_path).parts
         if len(path_parts) >= 3 and path_parts[0] == "objects":
-            video_dir = path_parts[1]  # video_1, video_2, etc.
+            video_dir = path_parts[1]  # reconstruccion_jonathan, etc.
             filename = path_parts[2]  # frame_00367_obj_2.jpg
 
             # Extract frame number from filename
             if "_obj_" in filename:
                 frame_base = filename.split("_obj_")[0]  # frame_00367
-                # Frames have video_X_ prefix: video_1_frame_00367.jpg
-                frame_name = f"{video_dir}_{frame_base}.jpg"
+                # Frames are named simply: frame_00367.jpg (no video prefix)
+                frame_name = f"{frame_base}.jpg"
                 frame_path = f"frames/{video_dir}/{frame_name}"
             else:
                 frame_path = None

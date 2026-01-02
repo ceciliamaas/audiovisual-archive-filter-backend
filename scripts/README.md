@@ -1,7 +1,5 @@
 # Scripts Directory Structure
 
-Clean, production-ready pipeline for video processing with state management and standardized naming.
-
 ## 📁 Directory Organization
 
 ### `pipeline/` - Integrated Video Processing Pipeline
@@ -43,9 +41,9 @@ frame_path = NamingConvention.frame_local_path("my_video", 42)
 # -> data/frames/my_video/frame_00042.jpg
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
-### Process a Video (Single Command!)
+### Process a Video
 
 ```bash
 # YouTube
@@ -82,7 +80,7 @@ python -m scripts.pipeline resume "my_video"
 python -m scripts.pipeline validate "my_video"
 ```
 
-## 📝 Naming Conventions
+## Naming Conventions
 
 All files follow standardized naming:
 
@@ -106,7 +104,7 @@ All files follow standardized naming:
 - `object_embeddings.pkl` / `object_paths.pkl`
 - Location: `data/embeddings/`
 
-## 🔧 State Management
+## State Management
 
 Each video's processing state is tracked in `data/pipeline_state/{video_name}.json`:
 
@@ -137,8 +135,3 @@ This enables:
 - Track what's been processed
 - Query video status
 - Identify failed videos
-
-## 📚 Additional Documentation
-
-- **[PIPELINE_GUIDE.md](PIPELINE_GUIDE.md)** - Complete usage guide with examples and troubleshooting
-- See inline documentation in each module for detailed API docs

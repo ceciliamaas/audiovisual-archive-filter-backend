@@ -72,6 +72,7 @@ class QdrantStorage:
         self,
         embeddings: Dict[str, np.ndarray],
         paths: Dict[str, str],
+        timestamps: Optional[Dict[str, float]] = None,
         batch_size: int = 100,
     ) -> int:
         """
@@ -80,15 +81,25 @@ class QdrantStorage:
         Args:
             embeddings: Dict mapping frame keys to embedding vectors
             paths: Dict mapping frame keys to S3 storage paths
+            timestamps: Dict mapping frame keys to timestamp in seconds
             batch_size: Number of vectors to upload per batch
 
         Returns:
             Number of embeddings stored
         """
+        if timestamps is None:
+            timestamps = {}
+
         points = []
         for idx, (key, embedding) in enumerate(embeddings.items()):
-            # Extract video name from key (e.g., "reconstruccion_jonathan/frame_00001.jpg")
+            # Extract video name and frame index from key (e.g., "reconstruccion_jonathan/frame_00001.jpg")
             video_name = key.split("/")[0] if "/" in key else "unknown"
+            frame_name = key.split("/")[-1] if "/" in key else key
+
+            # Parse frame index to potentially reconstruct timestamp
+            from scripts.pipeline.naming import NamingConvention
+
+            frame_index = NamingConvention.parse_frame_index(frame_name)
 
             point = PointStruct(
                 id=idx,
@@ -98,6 +109,8 @@ class QdrantStorage:
                     "path": paths.get(key, f"frames/{key}"),
                     "video_name": video_name,
                     "type": "frame",
+                    "frame_index": frame_index,
+                    "timestamp": timestamps.get(key, 0.0),
                 },
             )
             points.append(point)
@@ -173,7 +186,7 @@ class QdrantStorage:
         query_vector: np.ndarray,
         limit: int = 10,
         video_name: Optional[str] = None,
-    ) -> List[Tuple[str, float]]:
+    ) -> List[Tuple[str, float, Dict]]:
         """
         Search for similar frames.
 
@@ -183,7 +196,7 @@ class QdrantStorage:
             video_name: Optional filter by video name
 
         Returns:
-            List of (path, similarity_score) tuples
+            List of (path, similarity_score, metadata) tuples
         """
         query_filter = None
         if video_name:
@@ -200,14 +213,25 @@ class QdrantStorage:
             query_filter=query_filter,
         ).points
 
-        return [(hit.payload["path"], hit.score) for hit in results]
+        return [
+            (
+                hit.payload["path"],
+                hit.score,
+                {
+                    "video_name": hit.payload.get("video_name"),
+                    "frame_index": hit.payload.get("frame_index"),
+                    "timestamp": hit.payload.get("timestamp", 0.0),
+                },
+            )
+            for hit in results
+        ]
 
     def search_objects(
         self,
         query_vector: np.ndarray,
         limit: int = 10,
         video_name: Optional[str] = None,
-    ) -> List[Tuple[str, float]]:
+    ) -> List[Tuple[str, float, Dict]]:
         """
         Search for similar objects.
 
@@ -217,7 +241,7 @@ class QdrantStorage:
             video_name: Optional filter by video name
 
         Returns:
-            List of (path, similarity_score) tuples
+            List of (path, similarity_score, metadata) tuples
         """
         query_filter = None
         if video_name:
@@ -234,7 +258,19 @@ class QdrantStorage:
             query_filter=query_filter,
         ).points
 
-        return [(hit.payload["path"], hit.score) for hit in results]
+        return [
+            (
+                hit.payload["path"],
+                hit.score,
+                {
+                    "video_name": hit.payload.get("video_name"),
+                    "frame_index": hit.payload.get("frame_index"),
+                    "object_index": hit.payload.get("object_index"),
+                    "timestamp": hit.payload.get("timestamp", 0.0),
+                },
+            )
+            for hit in results
+        ]
 
     def get_collection_info(self, collection: str) -> Dict:
         """Get information about a collection"""

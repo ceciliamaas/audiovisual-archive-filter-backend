@@ -203,8 +203,13 @@ class SearchEngine:
             )
             results.extend(
                 [
-                    SearchResult(path=path, similarity=score, result_type="frame")
-                    for path, score in frame_results
+                    SearchResult(
+                        path=path,
+                        similarity=score,
+                        result_type="frame",
+                        metadata=metadata,
+                    )
+                    for path, score, metadata in frame_results
                 ]
             )
 
@@ -215,8 +220,13 @@ class SearchEngine:
             )
             results.extend(
                 [
-                    SearchResult(path=path, similarity=score, result_type="object")
-                    for path, score in object_results
+                    SearchResult(
+                        path=path,
+                        similarity=score,
+                        result_type="object",
+                        metadata=metadata,
+                    )
+                    for path, score, metadata in object_results
                 ]
             )
 
@@ -256,8 +266,13 @@ class SearchEngine:
             )
             results.extend(
                 [
-                    SearchResult(path=path, similarity=score, result_type="frame")
-                    for path, score in frame_results
+                    SearchResult(
+                        path=path,
+                        similarity=score,
+                        result_type="frame",
+                        metadata=metadata,
+                    )
+                    for path, score, metadata in frame_results
                 ]
             )
 
@@ -268,8 +283,13 @@ class SearchEngine:
             )
             results.extend(
                 [
-                    SearchResult(path=path, similarity=score, result_type="object")
-                    for path, score in object_results
+                    SearchResult(
+                        path=path,
+                        similarity=score,
+                        result_type="object",
+                        metadata=metadata,
+                    )
+                    for path, score, metadata in object_results
                 ]
             )
 

@@ -97,6 +97,18 @@ class ComputeEmbeddingsStep(PipelineStep):
         frames_dir = NamingConvention.frames_dir_local(self.video_name)
         frame_files = sorted(frames_dir.glob("frame_*.jpg"))
 
+        # Get video FPS to calculate timestamps
+        video_path = NamingConvention.video_local_path(self.video_name)
+        import cv2
+
+        cap = cv2.VideoCapture(str(video_path))
+        video_fps = cap.get(cv2.CAP_PROP_FPS) or 1.0  # Default to 1 if unable to read
+        cap.release()
+
+        # Get target FPS from config to calculate actual frame timestamps
+        target_fps = self._get_config("fps", 1)
+        frame_interval = max(1, int(video_fps / target_fps))
+
         # Check what's already in Qdrant
         try:
             qdrant = QdrantStorage()
@@ -109,6 +121,7 @@ class ComputeEmbeddingsStep(PipelineStep):
 
         embeddings = {}
         paths = {}
+        timestamps = {}
 
         # Process all frames (Qdrant will handle duplicates via upsert)
         frames_to_process = [(i, f) for i, f in enumerate(frame_files)]
@@ -153,9 +166,19 @@ class ComputeEmbeddingsStep(PipelineStep):
                             NamingConvention.parse_frame_index(frame_path.name),
                         )
 
-                        return (frame_key, embedding, s3_key, None)
+                        # Calculate timestamp for this frame
+                        frame_index = NamingConvention.parse_frame_index(
+                            frame_path.name
+                        )
+                        timestamp_seconds = (
+                            (frame_index * frame_interval) / video_fps
+                            if frame_index is not None
+                            else 0.0
+                        )
+
+                        return (frame_key, embedding, s3_key, timestamp_seconds, None)
                     else:
-                        return (frame_key, None, None, "Empty response from API")
+                        return (frame_key, None, None, 0.0, "Empty response from API")
 
                 except Exception as e:
                     error_str = str(e)
@@ -164,9 +187,9 @@ class ComputeEmbeddingsStep(PipelineStep):
                         if retry_count < len(self.RETRY_DELAYS):
                             continue  # Retry with next delay
                     # For other errors or exhausted retries, return error
-                    return (frame_key, None, None, error_str)
+                    return (frame_key, None, None, 0.0, error_str)
 
-            return (frame_key, None, None, "Max retries exceeded")
+            return (frame_key, None, None, 0.0, "Max retries exceeded")
 
         # Process frames concurrently with progress bar
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
@@ -180,7 +203,7 @@ class ComputeEmbeddingsStep(PipelineStep):
                 bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
             ) as pbar:
                 for future in as_completed(futures):
-                    frame_key, embedding, s3_key, error = future.result()
+                    frame_key, embedding, s3_key, timestamp, error = future.result()
 
                     if error:
                         errors += 1
@@ -189,6 +212,7 @@ class ComputeEmbeddingsStep(PipelineStep):
                     else:
                         embeddings[frame_key] = embedding
                         paths[frame_key] = s3_key
+                        timestamps[frame_key] = timestamp
                         new_count += 1
 
                     pbar.set_postfix(success=new_count, errors=errors, refresh=False)
@@ -199,7 +223,7 @@ class ComputeEmbeddingsStep(PipelineStep):
                     if total_processed % 50 == 0 and len(embeddings) > 0:
                         try:
                             qdrant = QdrantStorage()
-                            qdrant.store_frame_embeddings(embeddings, paths)
+                            qdrant.store_frame_embeddings(embeddings, paths, timestamps)
                         except Exception as e:
                             print(f"    Warning: Failed to update Qdrant: {e}")
 
@@ -207,7 +231,7 @@ class ComputeEmbeddingsStep(PipelineStep):
         print("    Storing frame embeddings in Qdrant...")
         try:
             qdrant = QdrantStorage()
-            qdrant.store_frame_embeddings(embeddings, paths)
+            qdrant.store_frame_embeddings(embeddings, paths, timestamps)
             print(f"    ✅ Stored {new_count} frame embeddings to Qdrant")
         except Exception as e:
             print(f"    ❌ Failed to save embeddings to Qdrant: {e}")

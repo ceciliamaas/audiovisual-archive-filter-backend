@@ -29,16 +29,11 @@ def get_replicate_client():
     """Get or create Replicate client"""
     global _replicate_client
     if _replicate_client is None:
-        try:
-            import streamlit as st
-
-            token = st.secrets.get("REPLICATE_API_TOKEN")
-        except:
-            token = os.getenv("REPLICATE_API_TOKEN")
+        token = os.getenv("REPLICATE_API_TOKEN")
 
         if not token:
             raise RuntimeError(
-                "Missing Replicate API token. Set REPLICATE_API_TOKEN in environment or Streamlit secrets."
+                "Missing Replicate API token. Set REPLICATE_API_TOKEN in environment variables."
             )
 
         import replicate

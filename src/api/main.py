@@ -70,7 +70,6 @@ app.add_middleware(
         "http://localhost:5173",  # Vite default dev server
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
-        "http://localhost:8501",  # Streamlit
         # Add your production frontend URLs here:
         # "https://your-frontend-domain.com",
         # "https://www.your-frontend-domain.com",

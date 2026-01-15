@@ -23,6 +23,7 @@ from ..naming import NamingConvention
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from src.storage.qdrant import QdrantStorage
+from src.core.embeddings import EmbeddingService
 
 load_dotenv()
 
@@ -32,7 +33,6 @@ class ComputeEmbeddingsStep(PipelineStep):
 
     # Number of concurrent API requests (with sufficient credit, higher limits apply)
     MAX_WORKERS = 10  # Process 10 images in parallel
-    RETRY_DELAYS = [5, 10, 15]  # Retry delays in seconds for rate limit errors
 
     @property
     def step_name(self) -> str:
@@ -65,34 +65,26 @@ class ComputeEmbeddingsStep(PipelineStep):
 
     def execute(self) -> bool:
         """Compute embeddings for frames and objects."""
-        try:
-            import replicate
-        except ImportError:
-            print("    Installing replicate...")
-            import subprocess, sys
-
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "replicate"])
-            import replicate
-
-        client = replicate.Client(api_token=os.getenv("REPLICATE_API_TOKEN"))
+        # Initialize embedding service
+        self.embedding_service = EmbeddingService()
 
         # Compute frame embeddings
         print("    Computing frame embeddings...")
-        if not self._compute_frame_embeddings(client):
+        if not self._compute_frame_embeddings():
             return False
 
         # Compute object embeddings (if objects exist)
         objects_dir = NamingConvention.objects_dir_local(self.video_name)
         if objects_dir.exists() and list(objects_dir.glob("frame_*_obj_*.jpg")):
             print("    Computing object embeddings...")
-            if not self._compute_object_embeddings(client):
+            if not self._compute_object_embeddings():
                 return False
         else:
             print("    No objects to process, skipping object embeddings")
 
         return True
 
-    def _compute_frame_embeddings(self, client) -> bool:
+    def _compute_frame_embeddings(self) -> bool:
         """Compute embeddings for frames using concurrent processing and store in Qdrant."""
         frames_dir = NamingConvention.frames_dir_local(self.video_name)
         frame_files = sorted(frames_dir.glob("frame_*.jpg"))
@@ -142,54 +134,28 @@ class ComputeEmbeddingsStep(PipelineStep):
             i, frame_path = idx_and_path
             frame_key = f"{self.video_name}/{frame_path.name}"
 
-            for retry_count, delay in enumerate([0] + self.RETRY_DELAYS):
-                if delay > 0:
-                    time.sleep(delay)
+            # Use embedding service to compute embedding
+            embedding = self.embedding_service.compute_image_embedding(
+                frame_path, normalize=True, retry=True
+            )
 
-                try:
-                    with open(frame_path, "rb") as f:
-                        output = client.run(
-                            "andreasjansson/clip-features:75b33f253f7714a281ad3e9b28f63e3232d583716ef6718f2e46641077ea040a",
-                            input={"inputs": f},
-                        )
+            if embedding is not None:
+                s3_key = NamingConvention.frame_s3_key(
+                    self.video_name,
+                    NamingConvention.parse_frame_index(frame_path.name),
+                )
 
-                    if output and len(output) > 0:
-                        embedding_data = (
-                            output[0].get("embedding")
-                            if isinstance(output[0], dict)
-                            else output[0]
-                        )
-                        embedding = np.array(embedding_data, dtype=np.float32).copy()
+                # Calculate timestamp for this frame
+                frame_index = NamingConvention.parse_frame_index(frame_path.name)
+                timestamp_seconds = (
+                    (frame_index * frame_interval) / video_fps
+                    if frame_index is not None
+                    else 0.0
+                )
 
-                        s3_key = NamingConvention.frame_s3_key(
-                            self.video_name,
-                            NamingConvention.parse_frame_index(frame_path.name),
-                        )
-
-                        # Calculate timestamp for this frame
-                        frame_index = NamingConvention.parse_frame_index(
-                            frame_path.name
-                        )
-                        timestamp_seconds = (
-                            (frame_index * frame_interval) / video_fps
-                            if frame_index is not None
-                            else 0.0
-                        )
-
-                        return (frame_key, embedding, s3_key, timestamp_seconds, None)
-                    else:
-                        return (frame_key, None, None, 0.0, "Empty response from API")
-
-                except Exception as e:
-                    error_str = str(e)
-                    # Check if it's a rate limit error (429)
-                    if "429" in error_str or "throttled" in error_str.lower():
-                        if retry_count < len(self.RETRY_DELAYS):
-                            continue  # Retry with next delay
-                    # For other errors or exhausted retries, return error
-                    return (frame_key, None, None, 0.0, error_str)
-
-            return (frame_key, None, None, 0.0, "Max retries exceeded")
+                return (frame_key, embedding, s3_key, timestamp_seconds, None)
+            else:
+                return (frame_key, None, None, 0.0, "Failed to compute embedding")
 
         # Process frames concurrently with progress bar
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
@@ -247,6 +213,18 @@ class ComputeEmbeddingsStep(PipelineStep):
         objects_dir = NamingConvention.objects_dir_local(self.video_name)
         object_files = sorted(objects_dir.glob("frame_*_obj_*.jpg"))
 
+        # Get video FPS to calculate timestamps
+        video_path = NamingConvention.video_local_path(self.video_name)
+        import cv2
+
+        cap = cv2.VideoCapture(str(video_path))
+        video_fps = cap.get(cv2.CAP_PROP_FPS) or 1.0  # Default to 1 if unable to read
+        cap.release()
+
+        # Get target FPS from config to calculate actual frame timestamps
+        target_fps = self._get_config("fps", 1)
+        frame_interval = max(1, int(video_fps / target_fps))
+
         # Check what's already in Qdrant
         try:
             qdrant = QdrantStorage()
@@ -257,6 +235,7 @@ class ComputeEmbeddingsStep(PipelineStep):
 
         embeddings = {}
         paths = {}
+        timestamps = {}
 
         # Process all objects (Qdrant will handle duplicates via upsert)
         objects_to_process = [(i, f) for i, f in enumerate(object_files)]
@@ -284,29 +263,36 @@ class ComputeEmbeddingsStep(PipelineStep):
                 try:
                     with open(obj_path, "rb") as f:
                         output = client.run(
-                            "andreasjansson/clip-features:75b33f253f7714a281ad3e9b28f63e3232d583716ef6718f2e46641077ea040a",
-                            input={"inputs": f},
+                            "openai/clip",
+                            input={"image": f},
                         )
 
-                    if output and len(output) > 0:
-                        embedding_data = (
-                            output[0].get("embedding")
-                            if isinstance(output[0], dict)
-                            else output[0]
-                        )
-                        embedding = np.array(embedding_data, dtype=np.float32).copy()
+                    if output:
+                        # openai/clip can return either a list directly or need to extract from response
+                        if isinstance(output, list):
+                            embedding = np.array(output, dtype=np.float32).copy()
+                        elif isinstance(output, dict) and "embedding" in output:
+                            embedding = np.array(
+                                output["embedding"], dtype=np.float32
+                            ).copy()
+                        else:
+                            # Try to convert directly
+                            embedding = np.array(output, dtype=np.float32).copy()
 
                         indices = NamingConvention.parse_object_indices(obj_path.name)
                         s3_key = None
+                        timestamp_seconds = 0.0
                         if indices:
                             frame_idx, obj_idx = indices
                             s3_key = NamingConvention.object_s3_key(
                                 self.video_name, frame_idx, obj_idx
                             )
+                            # Calculate timestamp from frame index
+                            timestamp_seconds = (frame_idx * frame_interval) / video_fps
 
-                        return (obj_key, embedding, s3_key, None)
+                        return (obj_key, embedding, s3_key, timestamp_seconds, None)
                     else:
-                        return (obj_key, None, None, "Empty response from API")
+                        return (obj_key, None, None, 0.0, "Empty response from API")
 
                 except Exception as e:
                     error_str = str(e)
@@ -315,9 +301,9 @@ class ComputeEmbeddingsStep(PipelineStep):
                         if retry_count < len(self.RETRY_DELAYS):
                             continue  # Retry with next delay
                     # For other errors or exhausted retries, return error
-                    return (obj_key, None, None, error_str)
+                    return (obj_key, None, None, 0.0, error_str)
 
-            return (obj_key, None, None, "Max retries exceeded")
+            return (obj_key, None, None, 0.0, "Max retries exceeded")
 
         # Process objects concurrently with progress bar
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
@@ -332,7 +318,7 @@ class ComputeEmbeddingsStep(PipelineStep):
                 bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
             ) as pbar:
                 for future in as_completed(futures):
-                    obj_key, embedding, s3_key, error = future.result()
+                    obj_key, embedding, s3_key, timestamp, error = future.result()
 
                     if error:
                         errors += 1
@@ -342,6 +328,7 @@ class ComputeEmbeddingsStep(PipelineStep):
                         embeddings[obj_key] = embedding
                         if s3_key:
                             paths[obj_key] = s3_key
+                        timestamps[obj_key] = timestamp
                         new_count += 1
 
                     pbar.set_postfix(success=new_count, errors=errors, refresh=False)
@@ -352,7 +339,9 @@ class ComputeEmbeddingsStep(PipelineStep):
                     if total_processed % 100 == 0 and len(embeddings) > 0:
                         try:
                             qdrant = QdrantStorage()
-                            qdrant.store_object_embeddings(embeddings, paths)
+                            qdrant.store_object_embeddings(
+                                embeddings, paths, timestamps
+                            )
                         except Exception as e:
                             print(f"    Warning: Failed to update Qdrant: {e}")
 
@@ -360,7 +349,7 @@ class ComputeEmbeddingsStep(PipelineStep):
         print("    Storing object embeddings in Qdrant...")
         try:
             qdrant = QdrantStorage()
-            count = qdrant.store_object_embeddings(embeddings, paths)
+            count = qdrant.store_object_embeddings(embeddings, paths, timestamps)
             print(f"    ✅ Stored {new_count} object embeddings to Qdrant")
         except Exception as e:
             print(f"    ❌ Failed to save embeddings to Qdrant: {e}")

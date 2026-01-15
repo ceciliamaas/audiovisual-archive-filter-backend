@@ -145,6 +145,46 @@ class StorageManager:
 
         return False
 
+    def get_presigned_url(
+        self, remote_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        """
+        Get presigned URL for a file with automatic fallback.
+
+        Args:
+            remote_path: Path to file in storage
+            expiration: URL expiration time in seconds (default: 1 hour)
+
+        Returns:
+            Presigned URL or None if not available
+        """
+        storage = self.get_storage()
+
+        # Try primary storage
+        try:
+            url = storage.get_file_url(remote_path, expiration)
+            if url:
+                return url
+        except Exception as e:
+            logger.debug(
+                f"Could not get URL from primary storage for {remote_path}: {e}"
+            )
+
+        # Try fallback storage
+        if (
+            self.fallback_enabled
+            and self._fallback_storage
+            and storage != self._fallback_storage
+        ):
+            try:
+                return self._fallback_storage.get_file_url(remote_path, expiration)
+            except Exception as e:
+                logger.debug(
+                    f"Could not get URL from fallback storage for {remote_path}: {e}"
+                )
+
+        return None
+
     def get_status(self) -> Dict[str, Any]:
         """Get comprehensive storage status"""
         preferred_mode = get_preferred_storage_mode()

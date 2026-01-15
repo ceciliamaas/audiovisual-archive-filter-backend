@@ -17,6 +17,9 @@ class TextSearchRequest(BaseModel):
     similarity_threshold: Optional[float] = Field(
         None, ge=0.0, le=1.0, description="Minimum similarity score (0-1)"
     )
+    video_names: Optional[List[str]] = Field(
+        None, description="Filter results to specific videos (empty = search all)"
+    )
 
 
 class ImageSearchRequest(BaseModel):
@@ -27,6 +30,9 @@ class ImageSearchRequest(BaseModel):
     max_results: int = Field(50, ge=1, le=200, description="Maximum number of results")
     similarity_threshold: Optional[float] = Field(
         None, ge=0.0, le=1.0, description="Minimum similarity score (0-1)"
+    )
+    video_names: Optional[List[str]] = Field(
+        None, description="Filter results to specific videos (empty = search all)"
     )
 
 
@@ -44,6 +50,10 @@ class SearchResultItem(BaseModel):
     )
     url: Optional[str] = Field(
         None, description="Presigned URL for accessing the image (if available)"
+    )
+    frame_url: Optional[str] = Field(
+        None,
+        description="For objects: presigned URL for the full frame to display with bbox",
     )
 
 
@@ -147,3 +157,24 @@ class VideoListResponse(BaseModel):
 
     videos: List[VideoItem] = Field(..., description="List of videos")
     total: int = Field(..., description="Total number of videos")
+
+
+class VideoNamesResponse(BaseModel):
+    """Response model for video names only (lightweight)"""
+
+    video_names: List[str] = Field(..., description="List of video names")
+    total: int = Field(..., description="Total number of videos")
+
+
+class VideoProcessRequest(BaseModel):
+    """Request model for processing a video from URL or upload"""
+
+    video_name: str = Field(..., description="Name for the video")
+    source_type: Literal["youtube", "drive", "local"] = Field(
+        ..., description="Type of source: youtube, drive, or local"
+    )
+    source_url: str = Field(..., description="URL or path to video")
+    fps: int = Field(1, ge=1, le=30, description="Frames per second to extract")
+    force: bool = Field(
+        False, description="Force reprocessing even if already completed"
+    )

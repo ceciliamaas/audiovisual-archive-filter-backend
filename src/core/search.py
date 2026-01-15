@@ -3,7 +3,6 @@ Core search functionality for the audiovisual archive.
 Handles CLIP-based similarity search for both frames and objects using Qdrant.
 """
 
-import os
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any, Union
@@ -18,29 +17,9 @@ load_dotenv()
 from ..config.settings import app_config
 from ..storage import get_storage_manager
 from ..storage.qdrant import QdrantStorage
+from .embeddings import EmbeddingService, EmbeddingsManager
 
 logger = logging.getLogger(__name__)
-
-# Initialize Replicate client
-_replicate_client = None
-
-
-def get_replicate_client():
-    """Get or create Replicate client"""
-    global _replicate_client
-    if _replicate_client is None:
-        token = os.getenv("REPLICATE_API_TOKEN")
-
-        if not token:
-            raise RuntimeError(
-                "Missing Replicate API token. Set REPLICATE_API_TOKEN in environment variables."
-            )
-
-        import replicate
-
-        _replicate_client = replicate.Client(api_token=token)
-
-    return _replicate_client
 
 
 @dataclass
@@ -53,118 +32,23 @@ class SearchResult:
     metadata: Optional[Dict] = None
 
 
-class EmbeddingsManager:
-    """Manages embeddings using Qdrant vector database"""
-
-    def __init__(self):
-        self.storage_manager = get_storage_manager()
-        self.qdrant = QdrantStorage()
-        self._embeddings_loaded = False
-
-    def load_embeddings(self, force_reload: bool = False) -> bool:
-        """Check if embeddings are available in Qdrant"""
-        if self._embeddings_loaded and not force_reload:
-            return True
-
-        try:
-            # Check if collections have data
-            frames_info = self.qdrant.get_collection_info(
-                QdrantStorage.FRAMES_COLLECTION
-            )
-            objects_info = self.qdrant.get_collection_info(
-                QdrantStorage.OBJECTS_COLLECTION
-            )
-
-            if frames_info.get("points_count", 0) > 0:
-                logger.info(
-                    f"Using Qdrant: {frames_info['points_count']} frames, {objects_info.get('points_count', 0)} objects"
-                )
-                self._embeddings_loaded = True
-                return True
-            else:
-                logger.error(
-                    "Qdrant collections are empty. Please run the pipeline to generate embeddings."
-                )
-                return False
-        except Exception as e:
-            logger.error(f"Error checking Qdrant collections: {e}")
-            return False
-
-    def get_status(self) -> Dict[str, Any]:
-        """Get embeddings status information from Qdrant"""
-        try:
-            frames_info = self.qdrant.get_collection_info(
-                QdrantStorage.FRAMES_COLLECTION
-            )
-            objects_info = self.qdrant.get_collection_info(
-                QdrantStorage.OBJECTS_COLLECTION
-            )
-
-            return {
-                "loaded": self._embeddings_loaded,
-                "frame_count": frames_info.get("points_count", 0),
-                "object_count": objects_info.get("points_count", 0),
-            }
-        except Exception as e:
-            logger.error(f"Failed to get status: {e}")
-            return {
-                "loaded": False,
-                "frame_count": 0,
-                "object_count": 0,
-            }
-
-
 class SearchEngine:
     """Main search engine for the audiovisual archive"""
 
     def __init__(self):
         self.embeddings_manager = EmbeddingsManager()
-        self.replicate_client = get_replicate_client()
+        self.embedding_service = EmbeddingService()
         self.model_name = app_config.embedding_model
 
     def compute_text_embedding(self, text: str) -> Optional[np.ndarray]:
         """Compute CLIP embedding for text query"""
-        try:
-            inputs = {"text": text}
-            output = self.replicate_client.run(self.model_name, input=inputs)
-
-            if output and "embedding" in output:
-                embedding_list = output["embedding"]
-                embedding = np.array(embedding_list)
-                # Normalize embedding
-                embedding = embedding / np.linalg.norm(embedding)
-                return embedding
-            else:
-                logger.error("Empty output from CLIP model")
-                return None
-
-        except Exception as e:
-            logger.error(f"Error computing text embedding: {e}")
-            return None
+        return self.embedding_service.compute_text_embedding(text)
 
     def compute_image_embedding(
         self, image_path: Union[str, Path]
     ) -> Optional[np.ndarray]:
         """Compute CLIP embedding for image query"""
-        try:
-            # Open image file and send to Replicate
-            with open(image_path, "rb") as image_file:
-                inputs = {"image": image_file, "model": "ViT-B/32"}
-                output = self.replicate_client.run(self.model_name, input=inputs)
-
-            if output and "embedding" in output:
-                embedding_list = output["embedding"]
-                embedding = np.array(embedding_list)
-                # Normalize embedding
-                embedding = embedding / np.linalg.norm(embedding)
-                return embedding
-            else:
-                logger.error("Empty output from CLIP model")
-                return None
-
-        except Exception as e:
-            logger.error(f"Error computing image embedding: {e}")
-            return None
+        return self.embedding_service.compute_image_embedding(image_path, retry=False)
 
     def search_by_text(
         self,
@@ -172,8 +56,17 @@ class SearchEngine:
         search_frames: bool = True,
         search_objects: bool = True,
         max_results: int = None,
+        video_names: Optional[List[str]] = None,
     ) -> List[SearchResult]:
-        """Search for similar content using text query"""
+        """Search for similar content using text query
+
+        Args:
+            query: Text query for search
+            search_frames: Whether to search in frames
+            search_objects: Whether to search in objects
+            max_results: Maximum number of results
+            video_names: Optional list of video names to filter by
+        """
 
         if max_results is None:
             max_results = app_config.max_search_results
@@ -190,40 +83,80 @@ class SearchEngine:
 
         results = []
 
-        # Search using Qdrant
+        # Search using Qdrant with optional video filtering
         if search_frames:
-            frame_results = self.embeddings_manager.qdrant.search_frames(
-                query_embedding,
-                limit=max_results // 2 if search_objects else max_results,
-            )
-            results.extend(
-                [
-                    SearchResult(
-                        path=path,
-                        similarity=score,
-                        result_type="frame",
-                        metadata=metadata,
+            # If video_names is provided, search each video separately
+            if video_names:
+                for video_name in video_names:
+                    frame_results = self.embeddings_manager.qdrant.search_frames(
+                        query_embedding,
+                        limit=max_results,
+                        video_name=video_name,
                     )
-                    for path, score, metadata in frame_results
-                ]
-            )
+                    results.extend(
+                        [
+                            SearchResult(
+                                path=path,
+                                similarity=score,
+                                result_type="frame",
+                                metadata=metadata,
+                            )
+                            for path, score, metadata in frame_results
+                        ]
+                    )
+            else:
+                frame_results = self.embeddings_manager.qdrant.search_frames(
+                    query_embedding,
+                    limit=max_results // 2 if search_objects else max_results,
+                )
+                results.extend(
+                    [
+                        SearchResult(
+                            path=path,
+                            similarity=score,
+                            result_type="frame",
+                            metadata=metadata,
+                        )
+                        for path, score, metadata in frame_results
+                    ]
+                )
 
         if search_objects:
-            object_results = self.embeddings_manager.qdrant.search_objects(
-                query_embedding,
-                limit=max_results // 2 if search_frames else max_results,
-            )
-            results.extend(
-                [
-                    SearchResult(
-                        path=path,
-                        similarity=score,
-                        result_type="object",
-                        metadata=metadata,
+            # If video_names is provided, search each video separately
+            if video_names:
+                for video_name in video_names:
+                    object_results = self.embeddings_manager.qdrant.search_objects(
+                        query_embedding,
+                        limit=max_results,
+                        video_name=video_name,
                     )
-                    for path, score, metadata in object_results
-                ]
-            )
+                    results.extend(
+                        [
+                            SearchResult(
+                                path=path,
+                                similarity=score,
+                                result_type="object",
+                                metadata=metadata,
+                            )
+                            for path, score, metadata in object_results
+                        ]
+                    )
+            else:
+                object_results = self.embeddings_manager.qdrant.search_objects(
+                    query_embedding,
+                    limit=max_results // 2 if search_frames else max_results,
+                )
+                results.extend(
+                    [
+                        SearchResult(
+                            path=path,
+                            similarity=score,
+                            result_type="object",
+                            metadata=metadata,
+                        )
+                        for path, score, metadata in object_results
+                    ]
+                )
 
         # Sort by similarity and limit results
         results.sort(key=lambda x: x.similarity, reverse=True)
@@ -235,8 +168,17 @@ class SearchEngine:
         search_frames: bool = True,
         search_objects: bool = True,
         max_results: int = None,
+        video_names: Optional[List[str]] = None,
     ) -> List[SearchResult]:
-        """Search for similar content using image query"""
+        """Search for similar content using image query
+
+        Args:
+            image_path: Path to the query image
+            search_frames: Whether to search in frames
+            search_objects: Whether to search in objects
+            max_results: Maximum number of results
+            video_names: Optional list of video names to filter by
+        """
 
         if max_results is None:
             max_results = app_config.max_search_results
@@ -253,40 +195,80 @@ class SearchEngine:
 
         results = []
 
-        # Search using Qdrant
+        # Search using Qdrant with optional video filtering
         if search_frames:
-            frame_results = self.embeddings_manager.qdrant.search_frames(
-                query_embedding,
-                limit=max_results // 2 if search_objects else max_results,
-            )
-            results.extend(
-                [
-                    SearchResult(
-                        path=path,
-                        similarity=score,
-                        result_type="frame",
-                        metadata=metadata,
+            # If video_names is provided, search each video separately
+            if video_names:
+                for video_name in video_names:
+                    frame_results = self.embeddings_manager.qdrant.search_frames(
+                        query_embedding,
+                        limit=max_results,
+                        video_name=video_name,
                     )
-                    for path, score, metadata in frame_results
-                ]
-            )
+                    results.extend(
+                        [
+                            SearchResult(
+                                path=path,
+                                similarity=score,
+                                result_type="frame",
+                                metadata=metadata,
+                            )
+                            for path, score, metadata in frame_results
+                        ]
+                    )
+            else:
+                frame_results = self.embeddings_manager.qdrant.search_frames(
+                    query_embedding,
+                    limit=max_results // 2 if search_objects else max_results,
+                )
+                results.extend(
+                    [
+                        SearchResult(
+                            path=path,
+                            similarity=score,
+                            result_type="frame",
+                            metadata=metadata,
+                        )
+                        for path, score, metadata in frame_results
+                    ]
+                )
 
         if search_objects:
-            object_results = self.embeddings_manager.qdrant.search_objects(
-                query_embedding,
-                limit=max_results // 2 if search_frames else max_results,
-            )
-            results.extend(
-                [
-                    SearchResult(
-                        path=path,
-                        similarity=score,
-                        result_type="object",
-                        metadata=metadata,
+            # If video_names is provided, search each video separately
+            if video_names:
+                for video_name in video_names:
+                    object_results = self.embeddings_manager.qdrant.search_objects(
+                        query_embedding,
+                        limit=max_results,
+                        video_name=video_name,
                     )
-                    for path, score, metadata in object_results
-                ]
-            )
+                    results.extend(
+                        [
+                            SearchResult(
+                                path=path,
+                                similarity=score,
+                                result_type="object",
+                                metadata=metadata,
+                            )
+                            for path, score, metadata in object_results
+                        ]
+                    )
+            else:
+                object_results = self.embeddings_manager.qdrant.search_objects(
+                    query_embedding,
+                    limit=max_results // 2 if search_frames else max_results,
+                )
+                results.extend(
+                    [
+                        SearchResult(
+                            path=path,
+                            similarity=score,
+                            result_type="object",
+                            metadata=metadata,
+                        )
+                        for path, score, metadata in object_results
+                    ]
+                )
 
         # Sort by similarity and limit results
         results.sort(key=lambda x: x.similarity, reverse=True)

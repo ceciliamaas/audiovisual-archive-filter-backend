@@ -76,7 +76,14 @@ class DownloadStep(PipelineStep):
         video_path = NamingConvention.video_local_path(self.video_name)
 
         if not video_path.exists():
-            return False, f"Video file not created: {video_path}"
+            # Check if file exists without extension (yt-dlp might not add .mp4)
+            video_path_no_ext = video_path.with_suffix("")
+            if video_path_no_ext.exists():
+                # Rename to add .mp4 extension
+                video_path_no_ext.rename(video_path)
+                print(f"    ✓ Renamed {video_path_no_ext.name} to {video_path.name}")
+            else:
+                return False, f"Video file not created: {video_path}"
 
         if video_path.stat().st_size == 0:
             return False, f"Video file is empty: {video_path}"
@@ -86,7 +93,7 @@ class DownloadStep(PipelineStep):
         if not has_video:
             return (
                 False,
-                f"Downloaded file has no video stream (audio-only). The video may not be available or download format was incorrect.",
+                f"Downloaded file has no video stream (audio-only). This video only has audio available, possibly due to YouTube restrictions or age/region restrictions. Try a different video URL.",
             )
 
         return True, None
@@ -158,19 +165,58 @@ class DownloadStep(PipelineStep):
             print(f"    Removing existing file: {video_path}")
             video_path.unlink()
 
-        # Download with specific filename
-        # Format selection strategy: Try to get best quality with video
-        # Fallback chain ensures we always get video content
+        print(f"    Downloading from YouTube: {self.state.source_url}")
+        print(f"    Saving to: {video_path}")
+
+        # First, list available formats to find one with video
+        print(f"    Checking available formats...")
+        list_opts = {"quiet": True, "listformats": True}
+
+        video_format_id = None
+        try:
+            with YoutubeDL(list_opts) as ydl:
+                info = ydl.extract_info(self.state.source_url, download=False)
+                formats = info.get("formats", [])
+
+                # Find best format with video codec
+                video_formats = [
+                    f
+                    for f in formats
+                    if f.get("vcodec") != "none" and f.get("vcodec") != None
+                ]
+
+                if video_formats:
+                    # Sort by resolution and prefer mp4
+                    video_formats.sort(
+                        key=lambda f: (
+                            f.get("height", 0),
+                            1 if f.get("ext") == "mp4" else 0,
+                        ),
+                        reverse=True,
+                    )
+                    video_format_id = video_formats[0]["format_id"]
+                    print(
+                        f"    Found video format: {video_format_id} ({video_formats[0].get('height', '?')}p)"
+                    )
+                else:
+                    print(
+                        f"    Warning: No video formats found, trying default selection"
+                    )
+        except Exception as e:
+            print(f"    Warning: Could not list formats: {e}")
+
+        # Download with explicit format selection
         ydl_opts = {
-            "format": "bv*+ba/b",  # Best video+audio, fallback to best single file with video
+            "format": (
+                video_format_id
+                if video_format_id
+                else "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            ),
             "merge_output_format": "mp4",
             "outtmpl": str(video_path.with_suffix("")),  # Remove .mp4, yt-dlp adds it
             "quiet": False,
             "no_warnings": False,
         }
-
-        print(f"    Downloading from YouTube: {self.state.source_url}")
-        print(f"    Saving to: {video_path}")
 
         with YoutubeDL(ydl_opts) as ydl:
             try:
@@ -187,7 +233,7 @@ class DownloadStep(PipelineStep):
 
                 return True
             except Exception as e:
-                print(f"    Error: {e}")
+                print(f"    Download failed: {e}")
                 return False
 
     def _download_drive(self) -> bool:
@@ -205,7 +251,14 @@ class DownloadStep(PipelineStep):
         # Extract file ID from URL
         file_id = self._extract_drive_file_id(self.state.source_url)
         if not file_id:
-            print(f"    Error: Could not extract file ID from URL")
+            print(
+                f"    Error: Could not extract file ID from URL: {self.state.source_url}"
+            )
+            print(f"    Supported formats:")
+            print(f"      - https://drive.google.com/file/d/FILE_ID/view")
+            print(f"      - https://drive.google.com/open?id=FILE_ID")
+            print(f"      - https://drive.google.com/uc?id=FILE_ID")
+            print(f"      - Just the FILE_ID")
             return False
 
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -239,15 +292,29 @@ class DownloadStep(PipelineStep):
             return False
 
     def _extract_drive_file_id(self, drive_url: str) -> Optional[str]:
-        """Extract file ID from Google Drive URL."""
+        """Extract file ID from Google Drive URL.
+
+        Supports formats:
+        - https://drive.google.com/file/d/FILE_ID/view
+        - https://drive.google.com/open?id=FILE_ID
+        - https://drive.google.com/uc?id=FILE_ID
+        - Just the FILE_ID itself
+        """
+        import re
+
         if "drive.google.com" not in drive_url:
+            # Maybe it's just the file ID
+            if re.match(r"^[a-zA-Z0-9_-]{20,}$", drive_url):
+                return drive_url
             return None
 
+        # Format: https://drive.google.com/file/d/FILE_ID/view
         if "/file/d/" in drive_url:
-            # Format: https://drive.google.com/file/d/FILE_ID/view
-            return drive_url.split("/file/d/")[1].split("/")[0]
+            return drive_url.split("/file/d/")[1].split("/")[0].split("?")[0]
+
+        # Format: https://drive.google.com/open?id=FILE_ID
+        # Format: https://drive.google.com/uc?id=FILE_ID
         elif "id=" in drive_url:
-            # Format: https://drive.google.com/open?id=FILE_ID
             return drive_url.split("id=")[1].split("&")[0]
 
         return None

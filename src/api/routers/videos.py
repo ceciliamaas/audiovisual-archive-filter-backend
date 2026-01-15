@@ -17,8 +17,10 @@ from pydantic import BaseModel
 from ..models import (
     VideoUploadResponse,
     VideoListResponse,
+    VideoNamesResponse,
     VideoItem,
     VideoProcessingStatus,
+    VideoProcessRequest,
     ErrorResponse,
 )
 from ...config.settings import app_config
@@ -37,7 +39,7 @@ _processing_status: dict = {}
 
 def _get_video_status(video_name: str) -> Optional[dict]:
     """Get video processing status"""
-    state_path = Path("data/state") / f"{video_name}.json"
+    state_path = Path("data/pipeline_state") / f"{video_name}.json"
     if state_path.exists():
         try:
             state = PipelineState.load(video_name)
@@ -67,21 +69,31 @@ def _calculate_progress(state: PipelineState) -> float:
     return (completed / total_steps) * 100
 
 
-async def _process_video_background(video_name: str, video_path: Path):
+async def _process_video_background(
+    video_name: str,
+    source_type: str,
+    source_url: str,
+    fps: int = 1,
+    force: bool = False,
+):
     """Process video in background"""
     try:
         logger.info(f"Starting background processing for {video_name}")
 
-        # Create pipeline
-        pipeline = Pipeline()
+        # Create pipeline with config
+        pipeline = Pipeline(
+            config={
+                "fps": fps,
+            }
+        )
 
         # Process video
         success = pipeline.process_video(
             video_name=video_name,
-            source_type="local",
-            source_url=str(video_path),
+            source_type=source_type,
+            source_url=source_url,
             steps=None,  # Run all steps
-            force=False,
+            force=force,
         )
 
         if success:
@@ -172,8 +184,10 @@ async def upload_video(
         )
         state.save()
 
-        # Start background processing
-        background_tasks.add_task(_process_video_background, video_name, video_path)
+        # Start background processing with source info
+        background_tasks.add_task(
+            _process_video_background, video_name, "upload", str(video_path)
+        )
 
         return VideoUploadResponse(
             video_name=video_name,
@@ -186,6 +200,104 @@ async def upload_video(
     except Exception as e:
         logger.error(f"Video upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Video upload failed: {str(e)}")
+
+
+@router.post("/process", response_model=VideoUploadResponse)
+async def process_video_from_url(
+    background_tasks: BackgroundTasks,
+    request: VideoProcessRequest,
+):
+    """
+    Process a video from a URL (YouTube, Google Drive) or local path.
+
+    The video will be downloaded (if URL) and processed through the pipeline:
+    1. Download video (if YouTube/Drive URL)
+    2. Extract frames at specified FPS
+    3. Detect objects using YOLO
+    4. Compute CLIP embeddings with timestamps
+    5. Upload to cloud storage
+
+    Args:
+        request: VideoProcessRequest with source details
+
+    Returns:
+        VideoUploadResponse with processing status
+
+    Raises:
+        HTTPException: If processing cannot be started
+
+    Examples:
+        YouTube: {"video_name": "demo", "source_type": "youtube", "source_url": "https://youtube.com/watch?v=xxx", "fps": 1}
+        Drive: {"video_name": "demo", "source_type": "drive", "source_url": "https://drive.google.com/file/d/xxx", "fps": 1}
+    """
+    try:
+        logger.info(
+            f"Video process request: {request.video_name} from {request.source_type}"
+        )
+
+        # Sanitize video name
+        from scripts.pipeline.naming import NamingConvention
+
+        video_name = NamingConvention.sanitize_video_name(request.video_name)
+
+        # Check if video already exists and is being processed
+        existing_status = _get_video_status(video_name)
+        if existing_status and existing_status["status"] not in ["completed", "failed"]:
+            if not request.force:
+                return VideoUploadResponse(
+                    video_name=video_name,
+                    status=existing_status["status"],
+                    message=f"Video '{video_name}' is already being processed. Use force=true to reprocess.",
+                )
+
+        # Validate source type
+        if request.source_type not in ["youtube", "drive", "local"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid source_type: {request.source_type}. Must be 'youtube', 'drive', or 'local'.",
+            )
+
+        # For local files, validate that path exists
+        if request.source_type == "local":
+            local_path = Path(request.source_url)
+            if not local_path.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Local file not found: {request.source_url}",
+                )
+
+        # Create initial pipeline state
+        state = PipelineState(
+            video_name=video_name,
+            status=VideoStatus.PENDING,
+            source_type=request.source_type,
+            source_url=request.source_url,
+        )
+        state.save()
+
+        # Start background processing
+        background_tasks.add_task(
+            _process_video_background,
+            video_name,
+            request.source_type,
+            request.source_url,
+            request.fps,
+            request.force,
+        )
+
+        return VideoUploadResponse(
+            video_name=video_name,
+            status="pending",
+            message=f"Video '{video_name}' processing started from {request.source_type}.",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video process error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to start video processing: {str(e)}"
+        )
 
 
 @router.get("/status/{video_name}", response_model=VideoProcessingStatus)
@@ -241,7 +353,7 @@ async def list_videos(
         VideoListResponse with list of videos
     """
     try:
-        state_dir = Path("data/state")
+        state_dir = Path("data/pipeline_state")
         if not state_dir.exists():
             return VideoListResponse(videos=[], total=0)
 
@@ -276,6 +388,61 @@ async def list_videos(
     except Exception as e:
         logger.error(f"Error listing videos: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list videos: {str(e)}")
+
+
+@router.get("/names", response_model=VideoNamesResponse)
+async def get_video_names(
+    status: Optional[str] = Query(
+        None, description="Filter by status (pending, processing, completed, failed)"
+    ),
+):
+    """
+    Get list of video names only (lightweight endpoint for filters).
+
+    Args:
+        status: Optional status filter
+
+    Returns:
+        VideoNamesResponse with list of video names
+    """
+    try:
+        state_dir = Path("data/pipeline_state")
+        if not state_dir.exists():
+            return VideoNamesResponse(video_names=[], total=0)
+
+        video_names = []
+        for state_file in state_dir.glob("*.json"):
+            try:
+                # Only read the status field, not the entire state
+                import json
+
+                with open(state_file, "r") as f:
+                    data = json.load(f)
+                    video_status = data.get("status")
+
+                    # Apply status filter
+                    if status and video_status != status:
+                        continue
+
+                    video_names.append(state_file.stem)
+
+            except Exception as e:
+                logger.warning(f"Error reading {state_file}: {e}")
+                continue
+
+        # Sort alphabetically
+        video_names.sort()
+
+        return VideoNamesResponse(
+            video_names=video_names,
+            total=len(video_names),
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting video names: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get video names: {str(e)}"
+        )
 
 
 @router.get("/stream/{video_name}")
@@ -347,9 +514,10 @@ async def delete_video(video_name: str):
     """
     try:
         # Delete state file
-        state_path = Path("data/state") / f"{video_name}.json"
+        state_path = Path("data/pipeline_state") / f"{video_name}.json"
         if state_path.exists():
             state_path.unlink()
+            logger.info(f"Deleted state file: {state_path}")
 
         # Delete local files
         video_path = NamingConvention.video_local_path(video_name)

@@ -236,6 +236,17 @@ class DetectObjectsStep(PipelineStep):
                                 self.video_name, frame_index, obj_idx
                             )
                             cv2.imwrite(str(object_path), cropped)
+
+                            # Save bounding box metadata
+                            bbox_metadata_path = object_path.with_suffix(".json")
+                            bbox_data = {
+                                "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                                "frame_index": frame_index,
+                                "object_index": obj_idx,
+                            }
+                            with open(bbox_metadata_path, "w") as f:
+                                json.dump(bbox_data, f)
+
                             new_objects += 1
 
                     total_objects = len(list(objects_dir.glob("frame_*_obj_*.jpg")))

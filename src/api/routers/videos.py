@@ -8,7 +8,7 @@ import tempfile
 import asyncio
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse, FileResponse
@@ -37,6 +37,28 @@ router = APIRouter()
 _processing_status: dict = {}
 
 
+def _is_state_stale(state: PipelineState, max_hours: int = 2) -> bool:
+    """Check if a processing state is stale (stuck for too long).
+    
+    Args:
+        state: Pipeline state to check
+        max_hours: Maximum hours before considering state stale
+    
+    Returns:
+        True if state is in processing status but hasn't been updated recently
+    """
+    if not state.status.is_processing():
+        return False
+    
+    try:
+        updated_at = datetime.fromisoformat(state.updated_at)
+        time_since_update = datetime.now() - updated_at
+        return time_since_update > timedelta(hours=max_hours)
+    except (ValueError, TypeError):
+        # If we can't parse the timestamp, consider it stale to be safe
+        return True
+
+
 def _get_video_status(video_name: str) -> Optional[dict]:
     """Get video processing status"""
     state_path = Path("data/pipeline_state") / f"{video_name}.json"
@@ -54,6 +76,7 @@ def _get_video_status(video_name: str) -> Optional[dict]:
                 "completed_at": state.completed_at,
                 "error_message": state.error_message,
                 "steps_completed": state.steps_completed,
+                "is_stale": _is_state_stale(state),
             }
         except Exception as e:
             logger.error(f"Error loading state for {video_name}: {e}")
@@ -243,7 +266,10 @@ async def process_video_from_url(
         # Check if video already exists and is being processed
         existing_status = _get_video_status(video_name)
         if existing_status and existing_status["status"] not in ["completed", "failed"]:
-            if not request.force:
+            # Check if state is stale (stuck for too long)
+            if existing_status.get("is_stale", False):
+                logger.warning(f"Video {video_name} has stale state ({existing_status['status']}), allowing reprocessing")
+            elif not request.force:
                 return VideoUploadResponse(
                     video_name=video_name,
                     status=existing_status["status"],
@@ -266,15 +292,9 @@ async def process_video_from_url(
                     detail=f"Local file not found: {request.source_url}",
                 )
 
-        # Create initial pipeline state
-        state = PipelineState(
-            video_name=video_name,
-            status=VideoStatus.PENDING,
-            source_type=request.source_type,
-            source_url=request.source_url,
-        )
-        state.save()
-
+        # Don't create state here - let the Pipeline handle it to avoid race conditions
+        # The Pipeline.process_video will load existing state or create new one as needed
+        
         # Start background processing
         background_tasks.add_task(
             _process_video_background,

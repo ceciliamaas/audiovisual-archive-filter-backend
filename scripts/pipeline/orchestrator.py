@@ -61,10 +61,21 @@ class Pipeline:
         # Load or create state
         state = PipelineState.load(video_name)
         if state:
-            print(f"Resuming from status: {state.status.value}")
-            if state.status == VideoStatus.COMPLETED and not force:
+            print(f"Existing state found: {state.status.value}")
+            
+            # If force is True, reset the state to start fresh
+            if force:
+                print("Force flag enabled - resetting state")
+                state = PipelineState(
+                    video_name=video_name, source_type=source_type, source_url=source_url
+                )
+                state.save()
+                print("Starting fresh processing")
+            elif state.status == VideoStatus.COMPLETED:
                 print("Already completed. Use --force to reprocess.")
                 return True
+            else:
+                print("Resuming from last state")
         else:
             state = PipelineState(
                 video_name=video_name, source_type=source_type, source_url=source_url
